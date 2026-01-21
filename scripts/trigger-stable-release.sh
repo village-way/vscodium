@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+#
+# VSCodium Stable 版本手动触发脚本
+# 用于通过 gh CLI 触发完整的构建和发布流程
+#
+# 使用方法:
+#   ./scripts/trigger-stable-release.sh [选项]
+#
+# 选项:
+#   --dispatch      使用 repository_dispatch 触发（推荐，模拟 spearhead 行为）
+#   --workflow      使用 workflow_dispatch 分别触发各平台
+#   --generate      仅生成 assets，不发布到 Release
+#   --force         强制更新版本信息
+#   --platform      指定平台 (macos|linux|windows|all)，默认 all
+#   --dry-run       仅显示将要执行的命令，不实际执行
+#   --help          显示帮助信息
+
+set -e
+
+# 默认值
+TRIGGER_MODE="dispatch"
+GENERATE_ONLY=false
+FORCE_VERSION=false
+PLATFORM="all"
+DRY_RUN=false
+
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+show_help() {
+    cat << EOF
+VSCodium Stable 版本手动触发脚本
+
+使用方法:
+  ./scripts/trigger-stable-release.sh [选项]
+
+选项:
+  --dispatch      使用 repository_dispatch 触发（推荐，模拟 spearhead 行为）
+  --workflow      使用 workflow_dispatch 分别触发各平台
+  --generate      仅生成 assets，不发布到 Release
+  --force         强制更新版本信息
+  --platform      指定平台 (macos|linux|windows|all)，默认 all
+  --dry-run       仅显示将要执行的命令，不实际执行
+  --help          显示帮助信息
+
+示例:
+  # 使用 repository_dispatch 触发所有平台构建和发布
+  ./scripts/trigger-stable-release.sh --dispatch
+
+  # 仅触发 macOS 构建
+  ./scripts/trigger-stable-release.sh --workflow --platform macos
+
+  # 生成 assets 但不发布（用于测试）
+  ./scripts/trigger-stable-release.sh --workflow --generate --platform all
+
+  # 预览命令但不执行
+  ./scripts/trigger-stable-release.sh --dispatch --dry-run
+
+注意事项:
+  1. 需要先安装并登录 gh CLI: gh auth login
+  2. repository_dispatch 模式会同时触发所有平台，无法指定单个平台
+  3. --generate 模式下 assets 会上传为 workflow artifacts，不会发布到 Release
+EOF
+}
+
+# 解析参数
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dispatch)
+            TRIGGER_MODE="dispatch"
+            shift
+            ;;
+        --workflow)
+            TRIGGER_MODE="workflow"
+            shift
+            ;;
+        --generate)
+            GENERATE_ONLY=true
+            shift
+            ;;
+        --force)
+            FORCE_VERSION=true
+            shift
+            ;;
+        --platform)
+            PLATFORM="$2"
+            shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        *)
+            print_error "未知选项: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# 检查 gh CLI
+check_gh_cli() {
+    if ! command -v gh &> /dev/null; then
+        print_error "gh CLI 未安装，请先安装: https://cli.github.com/"
+        exit 1
+    fi
+
+    if ! gh auth status &> /dev/null; then
+        print_error "gh CLI 未登录，请先执行: gh auth login"
+        exit 1
+    fi
+
+    print_success "gh CLI 已就绪"
+}
+
+# 获取仓库信息
+get_repo_info() {
+    REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+    if [[ -z "$REPO" ]]; then
+        print_error "无法获取仓库信息，请确保在正确的仓库目录中"
+        exit 1
+    fi
+    print_info "目标仓库: $REPO"
+}
+
+# 执行或显示命令
+run_cmd() {
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${NC} $*"
+    else
+        print_info "执行: $*"
+        eval "$@"
+    fi
+}
+
+# 使用 repository_dispatch 触发
+trigger_dispatch() {
+    print_info "使用 repository_dispatch 触发 stable 构建..."
+    
+    if [[ "$PLATFORM" != "all" ]]; then
+        print_warning "repository_dispatch 模式会触发所有平台，--platform 参数将被忽略"
+    fi
+
+    run_cmd "gh api repos/${REPO}/dispatches --method POST -f event_type=stable"
+    
+    if [[ "$DRY_RUN" != true ]]; then
+        print_success "已触发 repository_dispatch 事件"
+        print_info "所有平台的 stable 工作流将开始执行"
+        print_info "查看进度: https://github.com/${REPO}/actions"
+    fi
+}
+
+# 使用 workflow_dispatch 触发
+trigger_workflow() {
+    local workflows=()
+    
+    case $PLATFORM in
+        macos)
+            workflows=("stable-macos.yml")
+            ;;
+        linux)
+            workflows=("stable-linux.yml")
+            ;;
+        windows)
+            workflows=("stable-windows.yml")
+            ;;
+        all)
+            workflows=("stable-macos.yml" "stable-linux.yml" "stable-windows.yml")
+            ;;
+        *)
+            print_error "未知平台: $PLATFORM"
+            exit 1
+            ;;
+    esac
+
+    print_info "使用 workflow_dispatch 触发构建..."
+
+    local args=""
+    if [[ "$GENERATE_ONLY" == true ]]; then
+        args="$args -f generate_assets=true"
+        print_info "模式: 仅生成 assets（不发布）"
+    else
+        print_info "模式: 构建并发布"
+    fi
+
+    if [[ "$FORCE_VERSION" == true ]]; then
+        args="$args -f force_version=true"
+        print_info "强制更新版本: 是"
+    fi
+
+    for workflow in "${workflows[@]}"; do
+        print_info "触发工作流: $workflow"
+        run_cmd "gh workflow run $workflow $args"
+        
+        if [[ "$DRY_RUN" != true ]]; then
+            print_success "已触发 $workflow"
+        fi
+    done
+
+    if [[ "$DRY_RUN" != true ]]; then
+        print_info "查看进度: https://github.com/${REPO}/actions"
+    fi
+}
+
+# 主流程
+main() {
+    echo "========================================"
+    echo "  VSCodium Stable 构建触发脚本"
+    echo "========================================"
+    echo ""
+
+    check_gh_cli
+    get_repo_info
+
+    echo ""
+    print_info "触发模式: $TRIGGER_MODE"
+    print_info "目标平台: $PLATFORM"
+    print_info "仅生成 assets: $GENERATE_ONLY"
+    print_info "强制更新版本: $FORCE_VERSION"
+    print_info "预览模式: $DRY_RUN"
+    echo ""
+
+    case $TRIGGER_MODE in
+        dispatch)
+            trigger_dispatch
+            ;;
+        workflow)
+            trigger_workflow
+            ;;
+    esac
+
+    echo ""
+    print_success "完成！"
+}
+
+main

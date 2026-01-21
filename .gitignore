@@ -1,0 +1,23 @@
+vscode*
+zhanlu-vs/
+VS*/*
+VSCode*
+VSCodium*
+.DS_Store
+*.env
+assets/
+build/linux/appimage/out
+build/linux/appimage/pkg2appimage.AppDir
+build/linux/appimage/pkg2appimage-*.AppImage
+build/linux/appimage/pkg2appimage.AppImage
+build/linux/appimage/squashfs-root
+build/linux/appimage/VSCodium
+build/windows/msi/releasedir
+build/windows/msi/Files*.wxs
+build/windows/msi/Files*.wixobj
+sourcemaps/
+stores/snapcraft/insider/*.snap
+stores/snapcraft/stable/*.snap
+
+# Private source repository (fetched by fetch_source.sh)
+.source-repo/
