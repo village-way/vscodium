@@ -71,6 +71,17 @@ fi
 APP_NAME_LC="$( echo "${APP_NAME}" | awk '{print tolower($0)}' )"
 VERSION_CLEAN="${VERSION%-insider}"
 
+# 确保 tag 存在（如果不存在则创建）
+if ! git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
+    echo "远程仓库不存在 tag: ${VERSION}，正在创建..."
+    # 如果本地也没有这个 tag，先创建本地 tag
+    if ! git rev-parse "${VERSION}" &>/dev/null; then
+        git tag "${VERSION}"
+    fi
+    git push origin "${VERSION}"
+    echo "Tag ${VERSION} 已推送到远程仓库"
+fi
+
 # 如果是 stable 版本，先使用 --generate-notes 生成自动的 release notes
 if [[ "${VSCODE_QUALITY}" == "stable" ]] && [[ "${UPDATE_EXISTING}" == "false" ]]; then
     echo "生成自动 release notes..."

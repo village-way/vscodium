@@ -59,11 +59,17 @@ error LGHT0094 : Unresolved reference to symbol 'File:VSCODIUM.EXE' in section '
 
 ```bash
 # Read application name from product.json to get the actual product name
-LICENSE_DIR_TMP="..\\..\\..\\vscode"
+LICENSE_DIR_TMP="../../../vscode"  # ✅ 必须使用正斜杠，不能用反斜杠！
 APPLICATION_NAME="$( node -p "require('${LICENSE_DIR_TMP}/product.json').applicationName" )"
 # Capitalize first letter to match Windows executable naming convention
 APPLICATION_NAME_CAPITALIZED="$(echo ${APPLICATION_NAME:0:1} | tr '[:lower:]' '[:upper:]')${APPLICATION_NAME:1}"
 ```
+
+**⚠️ 重要：路径必须使用正斜杠 `/`，不能使用反斜杠 `\`！**
+- ✅ 正确：`LICENSE_DIR_TMP="../../../vscode"`
+- ❌ 错误：`LICENSE_DIR_TMP="..\\..\\..\\vscode"` 
+
+在 bash 中，反斜杠会被 Node.js 的 `require()` 当作转义字符，导致路径解析错误。
 
 **2. 修改 PRODUCT_NAME 定义 (第18-30行):**
 
