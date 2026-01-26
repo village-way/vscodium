@@ -55,6 +55,9 @@ jobs:
         run: ./get_pr.sh
 
       - name: Clone VSCode repo
+        env:
+          VSCODE_REPO: origin
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_repo.sh
 
       - name: Check PR or cron
@@ -129,6 +132,9 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Clone VSCode repo
+        env:
+          VSCODE_REPO: origin
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'
 
