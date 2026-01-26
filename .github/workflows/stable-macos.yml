@@ -70,6 +70,9 @@ jobs:
         run: npm install -g pnpm
 
       - name: Clone VSCode repo
+        env:
+          VSCODE_REPO: origin
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: . get_repo.sh
 
       - name: Check PR or cron
