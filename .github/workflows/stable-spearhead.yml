@@ -13,7 +13,8 @@ on:
         type: boolean
         description: Don't update VSCode
   schedule:
-    - cron: '0 18 * * *'
+    # Disabled: original cron was '0 18 * * *'
+    - cron: '0 0 31 2 *'
 
 jobs:
   build:
