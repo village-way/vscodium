@@ -21,3 +21,7 @@ stores/snapcraft/stable/*.snap
 
 # Private source repository (fetched by fetch_source.sh)
 .source-repo/
+
+certs/
+Zhanlu.zip
+docs/macos-code-signing.md

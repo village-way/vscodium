@@ -12,8 +12,8 @@ on:
       dont_update:
         type: boolean
         description: Don't update VSCode
-  schedule:
-    - cron: '0 18 * * *'
+  # schedule:
+  #   - cron: '0 18 * * *'
 
 jobs:
   build:
