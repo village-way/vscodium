@@ -12,6 +12,10 @@ on:
       checkout_pr:
         type: string
         description: Checkout PR
+      skip_patch:
+        type: boolean
+        description: Skip zhanlu patch step
+        default: true
   repository_dispatch:
     types: [stable]
 
@@ -24,6 +28,7 @@ env:
   OS_NAME: osx
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
+  SKIP_PATCH: "yes"
 
 jobs:
   build:
@@ -107,6 +112,7 @@ jobs:
       - name: Build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKIP_PATCH: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_patch == 'true' && 'yes' || 'no') || env.SKIP_PATCH }}
         run: ./build.sh
         if: env.SHOULD_BUILD == 'yes'
 

@@ -12,6 +12,10 @@ on:
       checkout_pr:
         type: string
         description: Checkout PR
+      skip_patch:
+        type: boolean
+        description: Skip zhanlu patch step
+        default: true
   repository_dispatch:
     types: [stable]
 
@@ -26,6 +30,7 @@ env:
   OS_NAME: linux
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
+  SKIP_PATCH: "yes"
 
 jobs:
   check:
@@ -166,6 +171,7 @@ jobs:
         env:
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
+          SKIP_PATCH: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_patch == 'true' && 'yes' || 'no') || env.SKIP_PATCH }}
         run: ./build.sh
         if: env.SHOULD_BUILD == 'yes'
 
