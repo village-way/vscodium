@@ -16,6 +16,10 @@ on:
         type: boolean
         description: Publish to WinGet
         default: false
+      skip_patch:
+        type: boolean
+        description: Skip zhanlu patch step
+        default: true
   repository_dispatch:
     types: [stable]
 
@@ -28,6 +32,7 @@ env:
   OS_NAME: windows
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
+  SKIP_PATCHES: "yes"
 
 jobs:
   check:
@@ -169,6 +174,7 @@ jobs:
         env:
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
+          SKIP_PATCHES: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_patch == 'true' && 'yes' || 'no') || env.SKIP_PATCHES }}
         run: ./build.sh
         if: env.SHOULD_BUILD == 'yes'
 
