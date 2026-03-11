@@ -187,7 +187,7 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Upload vscode artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: vscode
           path: ./vscode.tar.gz
@@ -275,7 +275,7 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Download vscode artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: vscode
         if: env.SHOULD_BUILD == 'yes'
@@ -315,7 +315,7 @@ jobs:
       # SIGNPATH_PROJECT_SLUG, and SIGNPATH_POLICY_SLUG in repository secrets
       - name: Upload unsigned artifacts for signing
         id: upload-unsigned-artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-${{ matrix.vscode_arch }}
           path: |
@@ -358,7 +358,7 @@ jobs:
         if: false && env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'yes'
 
       - name: Upload assets
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.vscode_arch }}
           path: assets/
