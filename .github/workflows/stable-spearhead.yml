@@ -12,6 +12,10 @@ on:
       dont_update:
         type: boolean
         description: Don't update VSCode
+      source_branch:
+        type: string
+        description: Branch of zhanlu-code for downstream stable platform builds
+        default: develop
   # schedule:
   #   - cron: '0 18 * * *'
 
@@ -90,4 +94,5 @@ jobs:
         uses: peter-evans/repository-dispatch@v4
         with:
           event-type: stable
+          client-payload: '{"source_branch":"${{ github.event.inputs.source_branch }}"}'
         if: env.SHOULD_BUILD == 'yes' || github.event.inputs.force_dispatch == 'true'
