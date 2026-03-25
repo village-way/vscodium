@@ -134,6 +134,7 @@ FILES_TO_COPY=(
     "get_repo.sh"
     "get_zhanlu.sh"
     "get_zhanlu_loc.sh"
+    "write_zhanlu_root_env.sh"
     "prepare_assets.sh"
     "prepare_checksums.sh"
     "prepare_src.sh"

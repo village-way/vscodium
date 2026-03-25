@@ -155,6 +155,12 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
+      - name: Write root .env for zhanlu-vs
+        env:
+          ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
+        run: ./write_zhanlu_root_env.sh
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+
       - name: Get and build zhanlu-vs
         env:
           ZHANLU_ENGINE: opencode
@@ -283,6 +289,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./check_tags.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
+      - name: Write root .env for zhanlu-vs
+        env:
+          ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
+        run: ./write_zhanlu_root_env.sh
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
 
       - name: Get and build zhanlu-vs
         env:
