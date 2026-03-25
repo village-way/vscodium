@@ -12,6 +12,7 @@
 #   --generate      仅生成 assets，不发布到 Release
 #   --force         强制更新版本信息
 #   --platform      指定平台 (macos|linux|windows|all)，默认 all
+#   --source-branch zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
 #   --dry-run       仅显示将要执行的命令，不实际执行
 #   --help          显示帮助信息
 
@@ -23,6 +24,8 @@ GENERATE_ONLY=false
 FORCE_VERSION=false
 PLATFORM="all"
 DRY_RUN=false
+# zhanlu-code 分支（与 workflow_dispatch input source_branch / repository_dispatch client_payload 一致）
+SOURCE_BRANCH="develop"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -60,6 +63,7 @@ VSCodium Stable 版本手动触发脚本
   --generate      仅生成 assets，不发布到 Release
   --force         强制更新版本信息
   --platform      指定平台 (macos|linux|windows|all)，默认 all
+  --source-branch zhanlu-code 分支，默认 develop
   --dry-run       仅显示将要执行的命令，不实际执行
   --help          显示帮助信息
 
@@ -75,6 +79,9 @@ VSCodium Stable 版本手动触发脚本
 
   # 预览命令但不执行
   ./scripts/trigger-stable-release.sh --dispatch --dry-run
+
+  # 使用 zhanlu-code 的 master 分支构建
+  ./scripts/trigger-stable-release.sh --workflow --source-branch master --platform all
 
 注意事项:
   1. 需要先安装并登录 gh CLI: gh auth login
@@ -104,6 +111,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --platform)
             PLATFORM="$2"
+            shift 2
+            ;;
+        --source-branch)
+            SOURCE_BRANCH="$2"
             shift 2
             ;;
         --dry-run)
@@ -165,8 +176,14 @@ trigger_dispatch() {
         print_warning "repository_dispatch 模式会触发所有平台，--platform 参数将被忽略"
     fi
 
-    run_cmd "gh api repos/${REPO}/dispatches --method POST -f event_type=stable"
-    
+    if [[ "$DRY_RUN" == true ]]; then
+        print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}"
+    else
+        print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}）"
+        python3 -c "import json,sys; print(json.dumps({'event_type':'stable','client_payload':{'source_branch':sys.argv[1]}}))" "${SOURCE_BRANCH}" \
+            | gh api "repos/${REPO}/dispatches" --method POST --input -
+    fi
+
     if [[ "$DRY_RUN" != true ]]; then
         print_success "已触发 repository_dispatch 事件"
         print_info "所有平台的 stable 工作流将开始执行"
@@ -199,23 +216,31 @@ trigger_workflow() {
 
     print_info "使用 workflow_dispatch 触发构建..."
 
-    local args=""
+    local -a wf_fields=()
     if [[ "$GENERATE_ONLY" == true ]]; then
-        args="$args -f generate_assets=true"
+        wf_fields+=(-f "generate_assets=true")
         print_info "模式: 仅生成 assets（不发布）"
     else
         print_info "模式: 构建并发布"
     fi
 
     if [[ "$FORCE_VERSION" == true ]]; then
-        args="$args -f force_version=true"
+        wf_fields+=(-f "force_version=true")
         print_info "强制更新版本: 是"
     fi
 
+    wf_fields+=(-f "source_branch=${SOURCE_BRANCH}")
+    print_info "zhanlu-code 分支: ${SOURCE_BRANCH}"
+
     for workflow in "${workflows[@]}"; do
         print_info "触发工作流: $workflow"
-        run_cmd "gh workflow run $workflow $args"
-        
+        if [[ "$DRY_RUN" == true ]]; then
+            echo -e "${YELLOW}[DRY-RUN]${NC} gh workflow run ${workflow} ${wf_fields[*]}"
+        else
+            print_info "执行: gh workflow run ${workflow} …"
+            gh workflow run "${workflow}" "${wf_fields[@]}"
+        fi
+
         if [[ "$DRY_RUN" != true ]]; then
             print_success "已触发 $workflow"
         fi
@@ -239,6 +264,7 @@ main() {
     echo ""
     print_info "触发模式: $TRIGGER_MODE"
     print_info "目标平台: $PLATFORM"
+    print_info "zhanlu-code 分支: $SOURCE_BRANCH"
     print_info "仅生成 assets: $GENERATE_ONLY"
     print_info "强制更新版本: $FORCE_VERSION"
     print_info "预览模式: $DRY_RUN"

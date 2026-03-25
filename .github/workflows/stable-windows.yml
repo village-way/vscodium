@@ -16,6 +16,10 @@ on:
         type: boolean
         description: Publish to WinGet
         default: false
+      source_branch:
+        type: string
+        description: Branch of zhanlu-code to fetch
+        default: develop
   repository_dispatch:
     types: [stable]
 
@@ -28,6 +32,7 @@ env:
   OS_NAME: windows
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
+  ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_branch || github.event.client_payload.source_branch || 'develop' }}
 
 jobs:
   check:
@@ -47,7 +52,7 @@ jobs:
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
-          SOURCE_BRANCH: develop
+          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
 
@@ -98,7 +103,7 @@ jobs:
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
-          SOURCE_BRANCH: develop
+          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
@@ -230,7 +235,7 @@ jobs:
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
-          SOURCE_BRANCH: develop
+          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
