@@ -158,6 +158,12 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
+      - name: Write root .env for zhanlu-vs
+        env:
+          ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
+        run: ./write_zhanlu_root_env.sh
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+
       - name: Get and build zhanlu-vs
         env:
           ZHANLU_ENGINE: opencode
@@ -292,6 +298,12 @@ jobs:
           name: vscode
         if: env.SHOULD_BUILD == 'yes'
 
+      - name: Write root .env for zhanlu-vs
+        env:
+          ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
+        run: ./write_zhanlu_root_env.sh
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+
       - name: Get and build zhanlu-vs
         env:
           ZHANLU_ENGINE: opencode
@@ -376,7 +388,8 @@ jobs:
           name: bin-${{ matrix.vscode_arch }}
           path: assets/
           retention-days: 3
-        if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+        # zhanlu_change - mirror prepare_assets: artifact on release builds too (not only --generate)
+        if: env.SHOULD_BUILD == 'yes' && (env.SHOULD_DEPLOY == 'yes' || github.event.inputs.generate_assets == 'true')
 
   winget:
     needs: build
