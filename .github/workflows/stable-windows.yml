@@ -20,6 +20,9 @@ on:
         type: string
         description: Branch of zhanlu-code to fetch
         default: develop
+      zhanlu_core_ref:
+        type: string
+        description: Branch or commit of zhanlu-core to fetch (optional)
   repository_dispatch:
     types: [stable]
 
@@ -33,6 +36,7 @@ env:
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
   ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_branch || github.event.client_payload.source_branch || 'develop' }}
+  ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }}
 
 jobs:
   check:
@@ -64,6 +68,7 @@ jobs:
       - name: Clone VSCode repo
         env:
           VSCODE_REPO: origin
+          ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_repo.sh
 
@@ -148,6 +153,7 @@ jobs:
       - name: Clone VSCode repo
         env:
           VSCODE_REPO: origin
+          ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'

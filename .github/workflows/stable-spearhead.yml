@@ -16,6 +16,9 @@ on:
         type: string
         description: Branch of zhanlu-code for downstream stable platform builds
         default: develop
+      zhanlu_core_ref:
+        type: string
+        description: Branch or commit of zhanlu-core for downstream stable platform builds
   # schedule:
   #   - cron: '0 18 * * *'
 
@@ -44,6 +47,8 @@ jobs:
           node-version-file: '.nvmrc'
 
       - name: Clone VSCode repo
+        env:
+          ZHANLU_CORE_REF: ${{ github.event.inputs.zhanlu_core_ref }}
         run: . get_repo.sh
 
       - name: Check existing VSCodium tags/releases
@@ -94,5 +99,5 @@ jobs:
         uses: peter-evans/repository-dispatch@v4
         with:
           event-type: stable
-          client-payload: '{"source_branch":"${{ github.event.inputs.source_branch }}"}'
+          client-payload: '{"source_branch":"${{ github.event.inputs.source_branch }}","zhanlu_core_ref":"${{ github.event.inputs.zhanlu_core_ref }}"}'
         if: env.SHOULD_BUILD == 'yes' || github.event.inputs.force_dispatch == 'true'

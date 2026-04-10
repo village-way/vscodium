@@ -12,7 +12,8 @@
 #   --generate      仅生成 assets，不发布到 Release
 #   --force         强制更新版本信息
 #   --platform      指定平台 (macos|linux|windows|all)，默认 all
-#   --source-branch zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
+#   --source-branch    zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
+#   --zhanlu-core-ref zhanlu-core 仓库分支或 commit，默认使用 upstream/stable.json 中的 commit
 #   --dry-run       仅显示将要执行的命令，不实际执行
 #   --help          显示帮助信息
 
@@ -26,6 +27,8 @@ PLATFORM="all"
 DRY_RUN=false
 # zhanlu-code 分支（与 workflow_dispatch input source_branch / repository_dispatch client_payload 一致）
 SOURCE_BRANCH="develop"
+# zhanlu-core 分支 / tag / commit（为空时回退到 upstream/stable.json commit）
+ZHANLU_CORE_REF=""
 
 # 颜色输出
 RED='\033[0;31m'
@@ -63,7 +66,8 @@ VSCodium Stable 版本手动触发脚本
   --generate      仅生成 assets，不发布到 Release
   --force         强制更新版本信息
   --platform      指定平台 (macos|linux|windows|all)，默认 all
-  --source-branch zhanlu-code 分支，默认 develop
+  --source-branch    zhanlu-code 分支，默认 develop
+  --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
   --dry-run       仅显示将要执行的命令，不实际执行
   --help          显示帮助信息
 
@@ -82,6 +86,12 @@ VSCodium Stable 版本手动触发脚本
 
   # 使用 zhanlu-code 的 master 分支构建
   ./scripts/trigger-stable-release.sh --workflow --source-branch master --platform all
+
+  # 使用 zhanlu-core 的 master 分支构建（不使用 upstream/stable.json 中的 commit）
+  ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref master --platform all
+
+  # 使用指定 zhanlu-code 分支和 zhanlu-core commit 构建
+  ./scripts/trigger-stable-release.sh --workflow --source-branch master --zhanlu-core-ref aee58b29843260c3b9c7daea2dc3beefba03930b --platform all
 
 注意事项:
   1. 需要先安装并登录 gh CLI: gh auth login
@@ -115,6 +125,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --source-branch)
             SOURCE_BRANCH="$2"
+            shift 2
+            ;;
+        --zhanlu-core-ref)
+            ZHANLU_CORE_REF="$2"
             shift 2
             ;;
         --dry-run)
@@ -177,10 +191,20 @@ trigger_dispatch() {
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}"
+        if [[ -n "${ZHANLU_CORE_REF}" ]]; then
+            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}"
+        else
+            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}"
+        fi
     else
-        print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}）"
-        python3 -c "import json,sys; print(json.dumps({'event_type':'stable','client_payload':{'source_branch':sys.argv[1]}}))" "${SOURCE_BRANCH}" \
+        if [[ -n "${ZHANLU_CORE_REF}" ]]; then
+            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}）"
+        else
+            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}）"
+        fi
+        python3 -c "import json,sys; payload={'event_type':'stable','client_payload':{'source_branch':sys.argv[1]}}; \
+if len(sys.argv) > 2 and sys.argv[2]: payload['client_payload']['zhanlu_core_ref']=sys.argv[2]; \
+print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" \
             | gh api "repos/${REPO}/dispatches" --method POST --input -
     fi
 
@@ -231,6 +255,12 @@ trigger_workflow() {
 
     wf_fields+=(-f "source_branch=${SOURCE_BRANCH}")
     print_info "zhanlu-code 分支: ${SOURCE_BRANCH}"
+    if [[ -n "${ZHANLU_CORE_REF}" ]]; then
+        wf_fields+=(-f "zhanlu_core_ref=${ZHANLU_CORE_REF}")
+        print_info "zhanlu-core Ref: ${ZHANLU_CORE_REF}"
+    else
+        print_info "zhanlu-core Ref: 使用 upstream/stable.json 中的 commit"
+    fi
 
     for workflow in "${workflows[@]}"; do
         print_info "触发工作流: $workflow"
@@ -265,6 +295,11 @@ main() {
     print_info "触发模式: $TRIGGER_MODE"
     print_info "目标平台: $PLATFORM"
     print_info "zhanlu-code 分支: $SOURCE_BRANCH"
+    if [[ -n "${ZHANLU_CORE_REF}" ]]; then
+        print_info "zhanlu-core Ref: $ZHANLU_CORE_REF"
+    else
+        print_info "zhanlu-core Ref: upstream/stable.json commit"
+    fi
     print_info "仅生成 assets: $GENERATE_ONLY"
     print_info "强制更新版本: $FORCE_VERSION"
     print_info "预览模式: $DRY_RUN"
