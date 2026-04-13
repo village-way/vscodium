@@ -25,3 +25,7 @@ stores/snapcraft/stable/*.snap
 certs/
 Zhanlu.zip
 docs/macos-code-signing.md
+sign-local.sh
+Zhanlu-*.zip
+.zhanlu
+docs/stable-build-workflows.md

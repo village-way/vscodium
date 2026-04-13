@@ -216,13 +216,17 @@ jobs:
     needs:
       - check
       - compile
-    runs-on: windows-2022
     strategy:
       fail-fast: false
+      # zhanlu_change start - ARM64 job uses windows-11-arm so get_zhanlu.sh compiles @kilocode/cli-windows-arm64 natively (x64 runner cross-compile fails on Bun toolchain extract)
       matrix:
-        vscode_arch:
-          - x64
-          - arm64
+        include:
+          - vscode_arch: x64
+            win_runner: windows-2022
+          - vscode_arch: arm64
+            win_runner: windows-11-arm
+      # zhanlu_change end
+    runs-on: ${{ matrix.win_runner }}
     defaults:
       run:
         shell: bash
