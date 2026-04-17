@@ -166,6 +166,8 @@ jobs:
         env:
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
+          ZHANLU_UPDATE_URL: ${{ secrets.ZHANLU_UPDATE_URL }}
+          ZHANLU_DOWNLOAD_URL: ${{ secrets.ZHANLU_DOWNLOAD_URL }}
         run: ./build.sh
         if: env.SHOULD_BUILD == 'yes'
 
