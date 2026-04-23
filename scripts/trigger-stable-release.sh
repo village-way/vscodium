@@ -14,6 +14,7 @@
 #   --platform      指定平台 (macos|linux|windows|all)，默认 all
 #   --source-branch    zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
 #   --zhanlu-core-ref zhanlu-core 仓库分支或 commit，默认使用 upstream/stable.json 中的 commit
+#   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
 #   --dry-run       仅显示将要执行的命令，不实际执行
 #   --help          显示帮助信息
 
@@ -29,6 +30,8 @@ DRY_RUN=false
 SOURCE_BRANCH="develop"
 # zhanlu-core 分支 / tag / commit（为空时回退到 upstream/stable.json commit）
 ZHANLU_CORE_REF=""
+# Release 版本：为空时触发前只解析一次，随后传给所有 workflow
+RELEASE_VERSION="${RELEASE_VERSION:-}"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -68,6 +71,7 @@ VSCodium Stable 版本手动触发脚本
   --platform      指定平台 (macos|linux|windows|all)，默认 all
   --source-branch    zhanlu-code 分支，默认 develop
   --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
+  --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
   --dry-run       仅显示将要执行的命令，不实际执行
   --help          显示帮助信息
 
@@ -88,10 +92,13 @@ VSCodium Stable 版本手动触发脚本
   ./scripts/trigger-stable-release.sh --workflow --source-branch master --platform all
 
   # 使用 zhanlu-core 的 master 分支构建（不使用 upstream/stable.json 中的 commit）
-  ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref master --platform all
+  ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref develop --platform all
 
   # 使用指定 zhanlu-code 分支和 zhanlu-core commit 构建
   ./scripts/trigger-stable-release.sh --workflow --source-branch master --zhanlu-core-ref aee58b29843260c3b9c7daea2dc3beefba03930b --platform all
+
+  # 使用已创建的 release/tag 构建并上传到同一个 Release
+  ./scripts/trigger-stable-release.sh --workflow --release-version 1.110.12670 --platform all
 
 注意事项:
   1. 需要先安装并登录 gh CLI: gh auth login
@@ -129,6 +136,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --zhanlu-core-ref)
             ZHANLU_CORE_REF="$2"
+            shift 2
+            ;;
+        --release-version)
+            RELEASE_VERSION="$2"
             shift 2
             ;;
         --dry-run)
@@ -182,6 +193,24 @@ run_cmd() {
     fi
 }
 
+resolve_release_version() {
+    if [[ -z "${RELEASE_VERSION}" ]]; then
+        print_info "解析 Release 版本..."
+        if [[ -x "./create-release.sh" ]]; then
+            RELEASE_VERSION=$(./create-release.sh --print-version)
+        else
+            RELEASE_VERSION=$(bash ./create-release.sh --print-version)
+        fi
+    fi
+
+    if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-insider)?$ ]]; then
+        print_error "Release 版本格式不正确: ${RELEASE_VERSION}"
+        exit 1
+    fi
+
+    print_info "Release 版本: ${RELEASE_VERSION}"
+}
+
 # 使用 repository_dispatch 触发
 trigger_dispatch() {
     print_info "使用 repository_dispatch 触发 stable 构建..."
@@ -192,19 +221,19 @@ trigger_dispatch() {
 
     if [[ "$DRY_RUN" == true ]]; then
         if [[ -n "${ZHANLU_CORE_REF}" ]]; then
-            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}"
+            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}，client_payload.release_version=${RELEASE_VERSION}"
         else
-            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}"
+            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.release_version=${RELEASE_VERSION}"
         fi
     else
         if [[ -n "${ZHANLU_CORE_REF}" ]]; then
-            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}）"
+            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}, client_payload.release_version=${RELEASE_VERSION}）"
         else
-            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}）"
+            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.release_version=${RELEASE_VERSION}）"
         fi
-        python3 -c "import json,sys; payload={'event_type':'stable','client_payload':{'source_branch':sys.argv[1]}}; \
+        python3 -c "import json,sys; payload={'event_type':'stable','client_payload':{'source_branch':sys.argv[1],'release_version':sys.argv[3]}}; \
 if len(sys.argv) > 2 and sys.argv[2]: payload['client_payload']['zhanlu_core_ref']=sys.argv[2]; \
-print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" \
+print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" "${RELEASE_VERSION}" \
             | gh api "repos/${REPO}/dispatches" --method POST --input -
     fi
 
@@ -254,6 +283,7 @@ trigger_workflow() {
     fi
 
     wf_fields+=(-f "source_branch=${SOURCE_BRANCH}")
+    wf_fields+=(-f "release_version=${RELEASE_VERSION}")
     print_info "zhanlu-code 分支: ${SOURCE_BRANCH}"
     if [[ -n "${ZHANLU_CORE_REF}" ]]; then
         wf_fields+=(-f "zhanlu_core_ref=${ZHANLU_CORE_REF}")
@@ -290,10 +320,12 @@ main() {
 
     check_gh_cli
     get_repo_info
+    resolve_release_version
 
     echo ""
     print_info "触发模式: $TRIGGER_MODE"
     print_info "目标平台: $PLATFORM"
+    print_info "Release 版本: $RELEASE_VERSION"
     print_info "zhanlu-code 分支: $SOURCE_BRANCH"
     if [[ -n "${ZHANLU_CORE_REF}" ]]; then
         print_info "zhanlu-core Ref: $ZHANLU_CORE_REF"

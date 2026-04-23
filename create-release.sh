@@ -7,6 +7,41 @@ set -e
 # 设置默认仓库（如果未设置）- 必须在加载 utils.sh 之前设置
 ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-village-way/vscodium}"
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
+PRINT_VERSION_ONLY=false
+DRY_RUN_VERSION=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --print-version)
+            PRINT_VERSION_ONLY=true
+            shift
+            ;;
+        --dry-run-version)
+            DRY_RUN_VERSION=true
+            shift
+            ;;
+        --help|-h)
+            cat << EOF
+Usage: ./create-release.sh [--print-version|--dry-run-version]
+
+Options:
+  --print-version     Print only the resolved release version and exit
+  --dry-run-version   Print RELEASE_VERSION=<version> and exit
+EOF
+            exit 0
+            ;;
+        *)
+            echo "错误: 未知选项: $1"
+            exit 1
+            ;;
+    esac
+done
+
+log_version() {
+    if [[ "${PRINT_VERSION_ONLY}" != "true" && "${DRY_RUN_VERSION}" != "true" ]]; then
+        echo "$1"
+    fi
+}
 
 # 加载工具函数和环境变量
 . ./utils.sh
@@ -18,10 +53,10 @@ VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 
 if [[ -n "${RELEASE_VERSION}" ]]; then
     VERSION="${RELEASE_VERSION}"
-    echo "使用环境变量中的版本号: ${VERSION}"
+    log_version "使用环境变量中的版本号: ${VERSION}"
 elif [[ -f "vscode/package.json" ]]; then
     VERSION=$(jq -r '.version' vscode/package.json)
-    echo "从 vscode/package.json 读取版本号: ${VERSION}"
+    log_version "从 vscode/package.json 读取版本号: ${VERSION}"
 elif [[ -f "upstream/${VSCODE_QUALITY}.json" ]]; then
     MS_TAG=$(jq -r '.tag' "upstream/${VSCODE_QUALITY}.json")
     # 生成补丁号：一年中的第几天 * 24 + 当前小时
@@ -31,7 +66,7 @@ elif [[ -f "upstream/${VSCODE_QUALITY}.json" ]]; then
     else
         VERSION="${MS_TAG}${TIME_PATCH}"
     fi
-    echo "从 upstream/${VSCODE_QUALITY}.json 生成版本号: ${VERSION}"
+    log_version "从 upstream/${VSCODE_QUALITY}.json 生成版本号: ${VERSION}"
 else
     echo "错误: 无法确定版本号，请设置 RELEASE_VERSION 环境变量"
     exit 1
@@ -56,6 +91,14 @@ if [[ -z "${MS_TAG}" ]] || [[ -z "${MS_COMMIT}" ]]; then
         MS_TAG="${MS_TAG:-$(jq -r '.tag' "upstream/${VSCODE_QUALITY}.json")}"
         MS_COMMIT="${MS_COMMIT:-$(jq -r '.commit' "upstream/${VSCODE_QUALITY}.json")}"
     fi
+fi
+
+if [[ "${PRINT_VERSION_ONLY}" == "true" ]]; then
+    echo "${VERSION}"
+    exit 0
+elif [[ "${DRY_RUN_VERSION}" == "true" ]]; then
+    echo "RELEASE_VERSION=${VERSION}"
+    exit 0
 fi
 
 # 检查 release 是否已存在
@@ -180,3 +223,4 @@ fi
 rm -f release_notes.tmp.md
 
 echo "Release ${VERSION} 创建/更新完成！"
+echo "RELEASE_VERSION=${VERSION}"

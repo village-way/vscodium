@@ -23,6 +23,9 @@ on:
       zhanlu_core_ref:
         type: string
         description: Branch or commit of zhanlu-core to fetch (optional)
+      release_version:
+        type: string
+        description: Release/tag version to publish (optional)
   repository_dispatch:
     types: [stable]
 
@@ -37,6 +40,8 @@ env:
   VSCODE_QUALITY: stable
   ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_branch || github.event.client_payload.source_branch || 'develop' }}
   ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }}
+  RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version || github.event.client_payload.release_version || '' }}
+  RELEASE_VERSION_EXPLICIT: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.release_version) || (github.event_name == 'repository_dispatch' && github.event.client_payload.release_version)) && 'yes' || 'no' }}
 
 jobs:
   check:
@@ -45,6 +50,7 @@ jobs:
       MS_COMMIT: ${{ env.MS_COMMIT }}
       MS_TAG: ${{ env.MS_TAG }}
       RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+      RELEASE_VERSION_EXPLICIT: ${{ env.RELEASE_VERSION_EXPLICIT }}
       SHOULD_BUILD: ${{ env.SHOULD_BUILD }}
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
 
@@ -94,6 +100,7 @@ jobs:
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
+      RELEASE_VERSION_EXPLICIT: ${{ needs.check.outputs.RELEASE_VERSION_EXPLICIT }}
       SHOULD_BUILD: ${{ (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true') && 'yes' || 'no' }}
       VSCODE_ARCH: 'x64'
     outputs:
@@ -237,6 +244,7 @@ jobs:
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
+      RELEASE_VERSION_EXPLICIT: ${{ needs.check.outputs.RELEASE_VERSION_EXPLICIT }}
       SHOULD_BUILD: ${{ (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true') && 'yes' || 'no' }}
       SHOULD_DEPLOY: ${{ needs.check.outputs.SHOULD_DEPLOY }}
       VSCODE_ARCH: ${{ matrix.vscode_arch }}

@@ -19,6 +19,9 @@ on:
       zhanlu_core_ref:
         type: string
         description: Branch or commit of zhanlu-core for downstream stable platform builds
+      release_version:
+        type: string
+        description: Release/tag version to publish (optional)
   # schedule:
   #   - cron: '0 18 * * *'
 
@@ -37,6 +40,8 @@ jobs:
       VSCODE_ARCH: arm64
       VSCODE_LATEST: ${{ github.event.inputs.dont_update == 'true' && 'no' || 'yes' }}
       VSCODE_QUALITY: stable
+      RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
+      RELEASE_VERSION_EXPLICIT: ${{ github.event.inputs.release_version && 'yes' || 'no' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -50,6 +55,10 @@ jobs:
         env:
           ZHANLU_CORE_REF: ${{ github.event.inputs.zhanlu_core_ref }}
         run: . get_repo.sh
+
+      - name: Capture release version
+        id: release-version
+        run: echo "release_version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Check existing VSCodium tags/releases
         env:
@@ -92,6 +101,7 @@ jobs:
 
       - name: Release source
         env:
+          ALLOW_SOURCE_ONLY_RELEASE: 'yes'
           GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
           GITHUB_USERNAME: ${{ github.repository_owner }}
         run: ./release.sh
@@ -101,5 +111,5 @@ jobs:
         uses: peter-evans/repository-dispatch@v4
         with:
           event-type: stable
-          client-payload: '{"source_branch":"${{ github.event.inputs.source_branch }}","zhanlu_core_ref":"${{ github.event.inputs.zhanlu_core_ref }}"}'
+          client-payload: '{"source_branch":"${{ github.event.inputs.source_branch }}","zhanlu_core_ref":"${{ github.event.inputs.zhanlu_core_ref }}","release_version":"${{ steps.release-version.outputs.release_version }}"}'
         if: env.SHOULD_BUILD == 'yes' || github.event.inputs.force_dispatch == 'true'
