@@ -15,6 +15,7 @@ set -e
 
 # 默认配置
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
+KILO_VERSION="${KILO_VERSION:-1.0.0}"
 EXPORT_ENV=false
 VALIDATE_ONLY=false
 VERSION_TO_VALIDATE=""
@@ -62,12 +63,11 @@ while [[ $# -gt 0 ]]; do
 
 版本号生成优先级:
     1. 环境变量 RELEASE_VERSION
-    2. vscode/package.json 中的 version 字段
-    3. upstream/\${VSCODE_QUALITY}.json 自动生成
+    2. KILO_VERSION + 4 位时间构建号自动生成
 
 自动生成算法:
     TIME_PATCH = (一年中的第几天 * 24 + 当前小时) 格式化为4位数字
-    版本号 = MS_TAG + TIME_PATCH [+ "-insider"]
+    版本号 = KILO_VERSION + TIME_PATCH [+ "-insider"]
 
 示例:
     # 生成 stable 版本号
@@ -231,18 +231,9 @@ generate_version() {
         source="环境变量 RELEASE_VERSION"
         log_info "使用环境变量中的版本号: ${version}"
     
-    # 优先级 2: 从 vscode/package.json 读取
-    elif [[ -f "vscode/package.json" ]]; then
-        if command -v jq &> /dev/null; then
-            version=$(jq -r '.version' vscode/package.json 2>/dev/null)
-            if [[ -n "${version}" ]] && [[ "${version}" != "null" ]]; then
-                source="vscode/package.json"
-                log_info "从 vscode/package.json 读取版本号: ${version}"
-            fi
-        fi
     fi
     
-    # 优先级 3: 自动生成
+    # 优先级 2: 自动生成
     if [[ -z "${version}" ]]; then
         # 尝试从 upstream JSON 文件获取 MS_TAG
         if ! get_upstream_info "${quality}"; then
@@ -260,13 +251,13 @@ generate_version() {
         
         # 生成版本号
         if [[ "${quality}" == "insider" ]]; then
-            version="${MS_TAG}${time_patch}-insider"
+            version="${KILO_VERSION}${time_patch}-insider"
         else
-            version="${MS_TAG}${time_patch}"
+            version="${KILO_VERSION}${time_patch}"
         fi
         
-        source="自动生成 (MS_TAG=${MS_TAG}, TIME_PATCH=${time_patch})"
-        log_info "从 upstream/${quality}.json 生成版本号: ${version}"
+        source="自动生成 (KILO_VERSION=${KILO_VERSION}, TIME_PATCH=${time_patch})"
+        log_info "从 KILO_VERSION=${KILO_VERSION} 生成版本号: ${version}"
     fi
     
     # 验证版本号格式
