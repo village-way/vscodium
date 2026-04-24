@@ -7,6 +7,7 @@ set -e
 # 设置默认仓库（如果未设置）- 必须在加载 utils.sh 之前设置
 ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-village-way/vscodium}"
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
+KILO_VERSION="${KILO_VERSION:-1.0.0}"
 PRINT_VERSION_ONLY=false
 DRY_RUN_VERSION=false
 
@@ -48,25 +49,21 @@ log_version() {
 
 # 动态获取版本号
 # 优先从环境变量 RELEASE_VERSION 获取
-# 其次从 vscode/package.json 读取
-# 最后从 upstream/stable.json 读取并生成
+# 否则使用 KILO_VERSION + VSCodium 4 位时间构建号生成
 
 if [[ -n "${RELEASE_VERSION}" ]]; then
     VERSION="${RELEASE_VERSION}"
     log_version "使用环境变量中的版本号: ${VERSION}"
-elif [[ -f "vscode/package.json" ]]; then
-    VERSION=$(jq -r '.version' vscode/package.json)
-    log_version "从 vscode/package.json 读取版本号: ${VERSION}"
 elif [[ -f "upstream/${VSCODE_QUALITY}.json" ]]; then
     MS_TAG=$(jq -r '.tag' "upstream/${VSCODE_QUALITY}.json")
     # 生成补丁号：一年中的第几天 * 24 + 当前小时
     TIME_PATCH=$(printf "%04d" $(($(date +%-j) * 24 + $(date +%-H))))
     if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
-        VERSION="${MS_TAG}${TIME_PATCH}-insider"
+        VERSION="${KILO_VERSION}${TIME_PATCH}-insider"
     else
-        VERSION="${MS_TAG}${TIME_PATCH}"
+        VERSION="${KILO_VERSION}${TIME_PATCH}"
     fi
-    log_version "从 upstream/${VSCODE_QUALITY}.json 生成版本号: ${VERSION}"
+    log_version "从 KILO_VERSION=${KILO_VERSION} 生成版本号: ${VERSION}"
 else
     echo "错误: 无法确定版本号，请设置 RELEASE_VERSION 环境变量"
     exit 1

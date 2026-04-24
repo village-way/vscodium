@@ -30,7 +30,7 @@ env:
   ASSETS_REPOSITORY: ${{ github.repository }}
   BINARY_NAME: zhanlu
   GH_REPO_PATH: ${{ github.repository }}
-  ORG_NAME: ${{ github.repository_owner }}
+  ORG_NAME: ecloud
   OS_NAME: osx
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable

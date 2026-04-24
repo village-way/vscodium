@@ -33,8 +33,9 @@ env:
   APP_NAME: Zhanlu
   ASSETS_REPOSITORY: ${{ github.repository }}
   BINARY_NAME: zhanlu
+  COMPANY_NAME_EN: China Mobile (Suzhou) Software Technology Co., Ltd.
   GH_REPO_PATH: ${{ github.repository }}
-  ORG_NAME: ${{ github.repository_owner }}
+  ORG_NAME: ecloud
   OS_NAME: windows
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
