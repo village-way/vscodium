@@ -7,27 +7,27 @@ update vscode to [@@MS_TAG@@](@@MS_URL@@)
 <table>
   <tr>
     <td>Windows x64</td>
-    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-win32-x64-@@VERSION@@@@QUALITY@@.tar.gz">zhanlu-cli-win32-x64-@@VERSION@@@@QUALITY@@.tar.gz</a></td>
+    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-win32-x64-@@VERSION@@@@QUALITY@@.zip">zhanlu-cli-win32-x64-@@VERSION@@@@QUALITY@@.zip</a></td>
   </tr>
   <tr>
     <td>Windows ARM64</td>
-    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-win32-arm64-@@VERSION@@@@QUALITY@@.tar.gz">zhanlu-cli-win32-arm64-@@VERSION@@@@QUALITY@@.tar.gz</a></td>
+    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-win32-arm64-@@VERSION@@@@QUALITY@@.zip">zhanlu-cli-win32-arm64-@@VERSION@@@@QUALITY@@.zip</a></td>
   </tr>
   <tr>
     <td>macOS x64</td>
-    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-darwin-x64-@@VERSION@@@@QUALITY@@.tar.gz">zhanlu-cli-darwin-x64-@@VERSION@@@@QUALITY@@.tar.gz</a></td>
+    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-darwin-x64-@@VERSION@@@@QUALITY@@.zip">zhanlu-cli-darwin-x64-@@VERSION@@@@QUALITY@@.zip</a></td>
   </tr>
   <tr>
     <td>macOS ARM64</td>
-    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-darwin-arm64-@@VERSION@@@@QUALITY@@.tar.gz">zhanlu-cli-darwin-arm64-@@VERSION@@@@QUALITY@@.tar.gz</a></td>
+    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-darwin-arm64-@@VERSION@@@@QUALITY@@.zip">zhanlu-cli-darwin-arm64-@@VERSION@@@@QUALITY@@.zip</a></td>
   </tr>
   <tr>
     <td>Linux x64</td>
-    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-linux-x64-@@VERSION@@@@QUALITY@@.tar.gz">zhanlu-cli-linux-x64-@@VERSION@@@@QUALITY@@.tar.gz</a></td>
+    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-linux-x64-@@VERSION@@@@QUALITY@@.zip">zhanlu-cli-linux-x64-@@VERSION@@@@QUALITY@@.zip</a></td>
   </tr>
   <tr>
     <td>Linux ARM64</td>
-    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-linux-arm64-@@VERSION@@@@QUALITY@@.tar.gz">zhanlu-cli-linux-arm64-@@VERSION@@@@QUALITY@@.tar.gz</a></td>
+    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/zhanlu-cli-linux-arm64-@@VERSION@@@@QUALITY@@.zip">zhanlu-cli-linux-arm64-@@VERSION@@@@QUALITY@@.zip</a></td>
   </tr>
 </table>
 
