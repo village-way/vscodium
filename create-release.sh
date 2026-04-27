@@ -50,6 +50,7 @@ log_version() {
 # 动态获取版本号
 # 优先从环境变量 RELEASE_VERSION 获取
 # 否则使用 KILO_VERSION + VSCodium 4 位时间构建号生成
+# 显式 RELEASE_VERSION 可以是标准 SemVer（如 1.0.1）；构建脚本会单独派生内部 VS Code 兼容补丁号
 
 if [[ -n "${RELEASE_VERSION}" ]]; then
     VERSION="${RELEASE_VERSION}"

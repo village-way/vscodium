@@ -22,6 +22,9 @@ on:
       release_version:
         type: string
         description: Release/tag version to publish (optional)
+      version_time_patch:
+        type: string
+        description: Internal 4-digit VS Code compatibility patch (optional)
   repository_dispatch:
     types: [stable]
 
@@ -39,6 +42,7 @@ env:
   ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_branch || github.event.client_payload.source_branch || 'develop' }}
   ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }}
   RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version || github.event.client_payload.release_version || '' }}
+  VERSION_TIME_PATCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_time_patch || github.event.client_payload.version_time_patch || '' }}
   RELEASE_VERSION_EXPLICIT: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.release_version) || (github.event_name == 'repository_dispatch' && github.event.client_payload.release_version)) && 'yes' || 'no' }}
 
 jobs:
