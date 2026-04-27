@@ -2,28 +2,9 @@ name: stable-spearhead
 
 on:
   workflow_dispatch:
-    inputs:
-      new_release:
-        type: boolean
-        description: Force new Release
-      force_dispatch:
-        type: boolean
-        description: Force dispatch
-      dont_update:
-        type: boolean
-        description: Don't update VSCode
-      source_branch:
-        type: string
-        description: Branch of zhanlu-code for downstream stable platform builds
-        default: develop
-      zhanlu_core_ref:
-        type: string
-        description: Branch or commit of zhanlu-core for downstream stable platform builds
-      release_version:
-        type: string
-        description: Release/tag version to publish (optional)
-  # schedule:
-  #   - cron: '0 18 * * *'
+  schedule:
+    # Runs at 02:00 Beijing time (18:00 UTC).
+    - cron: '0 18 * * *'
 
 jobs:
   build:
@@ -33,83 +14,42 @@ jobs:
       ASSETS_REPOSITORY: ${{ github.repository }}
       BINARY_NAME: zhanlu
       GH_REPO_PATH: ${{ github.repository }}
-      ORG_NAME: ${{ github.repository_owner }}
-      OS_NAME: osx
-      SOURCEMAPS_REPOSITORY: ${{ github.repository_owner }}/sourcemaps
-      VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
-      VSCODE_ARCH: arm64
-      VSCODE_LATEST: ${{ github.event.inputs.dont_update == 'true' && 'no' || 'yes' }}
+      GH_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
+      KILO_VERSION: 1.0.0
       VSCODE_QUALITY: stable
-      RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
-      RELEASE_VERSION_EXPLICIT: ${{ github.event.inputs.release_version && 'yes' || 'no' }}
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
 
-      - name: Clone VSCode repo
+      - name: Create release
+        id: create-release
+        run: |
+          set -euo pipefail
+
+          bash create-release.sh | tee create-release.log
+
+          RELEASE_VERSION="$(sed -n 's/^RELEASE_VERSION=//p' create-release.log | tail -n 1)"
+          if [[ -z "${RELEASE_VERSION}" ]]; then
+            echo "Failed to capture RELEASE_VERSION from create-release.sh output"
+            exit 1
+          fi
+
+          echo "release_version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Trigger stable platform workflows
+        run: |
+          bash ./scripts/trigger-stable-release.sh \
+            --workflow \
+            --zhanlu-core-ref develop \
+            --platform all \
+            --release-version "${RELEASE_VERSION}"
         env:
-          ZHANLU_CORE_REF: ${{ github.event.inputs.zhanlu_core_ref }}
-        run: . get_repo.sh
-
-      - name: Capture release version
-        id: release-version
-        run: echo "release_version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
-
-      - name: Check existing VSCodium tags/releases
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_RELEASE: ${{ github.event.inputs.new_release }}
-          IS_SPEARHEAD: 'yes'
-        run: . check_tags.sh
-
-      - name: Build
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ZHANLU_UPDATE_URL: ${{ secrets.ZHANLU_UPDATE_URL }}
-          ZHANLU_DOWNLOAD_URL: ${{ secrets.ZHANLU_DOWNLOAD_URL }}
-        run: ./build.sh
-        if: env.SHOULD_BUILD == 'yes'
-
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-          git_user_signingkey: true
-          git_commit_gpgsign: true
-        if: env.SHOULD_BUILD == 'yes' && github.event.inputs.dont_update != 'true'
-
-      - name: Update upstream version
-        run: ./update_upstream.sh
-        if: env.SHOULD_BUILD == 'yes' && github.event.inputs.dont_update != 'true'
-
-      - name: Prepare source
-        run: ./prepare_src.sh
-        if: env.SHOULD_BUILD == 'yes'
-
-      - name: Upload sourcemaps
-        env:
-          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          GITHUB_USERNAME: ${{ github.repository_owner }}
-        run: ./upload_sourcemaps.sh
-        if: env.SHOULD_BUILD == 'yes'
-
-      - name: Release source
-        env:
-          ALLOW_SOURCE_ONLY_RELEASE: 'yes'
-          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          GITHUB_USERNAME: ${{ github.repository_owner }}
-        run: ./release.sh
-        if: env.SHOULD_BUILD == 'yes'
-
-      - name: Dispatch builds
-        uses: peter-evans/repository-dispatch@v4
-        with:
-          event-type: stable
-          client-payload: '{"source_branch":"${{ github.event.inputs.source_branch }}","zhanlu_core_ref":"${{ github.event.inputs.zhanlu_core_ref }}","release_version":"${{ steps.release-version.outputs.release_version }}"}'
-        if: env.SHOULD_BUILD == 'yes' || github.event.inputs.force_dispatch == 'true'
+          RELEASE_VERSION: ${{ steps.create-release.outputs.release_version }}
