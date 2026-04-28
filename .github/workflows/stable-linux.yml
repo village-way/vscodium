@@ -55,6 +55,7 @@ jobs:
       RELEASE_VERSION_EXPLICIT: ${{ env.RELEASE_VERSION_EXPLICIT }}
       SHOULD_BUILD: ${{ env.SHOULD_BUILD }}
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
+      VSCODE_VERSION: ${{ env.VSCODE_VERSION }} # zhanlu_change - pass internal package version to Linux asset packaging
 
     steps:
       - uses: actions/checkout@v6
@@ -101,6 +102,7 @@ jobs:
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
       RELEASE_VERSION_EXPLICIT: ${{ needs.check.outputs.RELEASE_VERSION_EXPLICIT }}
       SHOULD_BUILD: ${{ (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true') && 'yes' || 'no' }}
+      VSCODE_VERSION: ${{ needs.check.outputs.VSCODE_VERSION }} # zhanlu_change - keep public release version separate from package version
       VSCODE_ARCH: 'x64'
     outputs:
       BUILD_SOURCEVERSION: ${{ env.BUILD_SOURCEVERSION }}
@@ -272,6 +274,7 @@ jobs:
       RELEASE_VERSION_EXPLICIT: ${{ needs.check.outputs.RELEASE_VERSION_EXPLICIT }}
       SHOULD_BUILD: ${{ (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true') && 'yes' || 'no' }}
       SHOULD_DEPLOY: ${{ needs.check.outputs.SHOULD_DEPLOY }}
+      VSCODE_VERSION: ${{ needs.check.outputs.VSCODE_VERSION }} # zhanlu_change - prepare_assets needs the generated native package version
       VSCODE_ARCH: ${{ matrix.vscode_arch }}
     outputs:
       RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
