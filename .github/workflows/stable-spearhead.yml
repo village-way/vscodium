@@ -31,8 +31,18 @@ jobs:
 
       - name: Create release
         id: create-release
+        env:
+          # Prefer Secrets, fallback to Variables (non-sensitive is fine in vars)
+          RELEASE_VERSION_BASE: ${{ secrets.RELEASE_VERSION_BASE || vars.RELEASE_VERSION_BASE }}
         run: |
           set -euo pipefail
+
+          # If RELEASE_VERSION_BASE is set (e.g. 1.1.0), generate TIME_PATCH and
+          # export RELEASE_VERSION (e.g. 1.1.0XXXX) for create-release.sh to use.
+          TIME_PATCH="$(printf "%04d" "$(( $(date +%-j) * 24 + $(date +%-H) ))")"
+          if [[ -n "${RELEASE_VERSION_BASE:-}" ]]; then
+            export RELEASE_VERSION="${RELEASE_VERSION_BASE}${TIME_PATCH}"
+          fi
 
           bash create-release.sh | tee create-release.log
 
