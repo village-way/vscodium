@@ -166,12 +166,13 @@ jobs:
         env:
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
-          ZHANLU_UPDATE_URL: ${{ secrets.ZHANLU_UPDATE_URL }}
-          ZHANLU_DOWNLOAD_URL: ${{ secrets.ZHANLU_DOWNLOAD_URL }}
-          ZHANLU_UPDATE_URL_LINGJI: ${{ secrets.ZHANLU_UPDATE_URL_LINGJI }}
-          ZHANLU_UPDATE_URL_ECLOUD: ${{ secrets.ZHANLU_UPDATE_URL_ECLOUD }}
-          ZHANLU_DOWNLOAD_URL_LINGJI: ${{ secrets.ZHANLU_DOWNLOAD_URL_LINGJI }}
-          ZHANLU_DOWNLOAD_URL_ECLOUD: ${{ secrets.ZHANLU_DOWNLOAD_URL_ECLOUD }}
+          # zhanlu_change start - allow CI secrets to configure Zhanlu product endpoints
+          ZHANLU_UPDATE_URL_LINGJI: ${{ secrets.ZHANLU_UPDATE_URL_LINGJI || secrets.ZHANLU_UPDATE_URL }}
+          ZHANLU_UPDATE_URL_ECLOUD: ${{ secrets.ZHANLU_UPDATE_URL_ECLOUD || secrets.ZHANLU_UPDATE_URL }}
+          ZHANLU_DOWNLOAD_URL_LINGJI: ${{ secrets.ZHANLU_DOWNLOAD_URL_LINGJI || secrets.ZHANLU_DOWNLOAD_URL }}
+          ZHANLU_DOWNLOAD_URL_ECLOUD: ${{ secrets.ZHANLU_DOWNLOAD_URL_ECLOUD || secrets.ZHANLU_DOWNLOAD_URL }}
+          ZHANLU_RELEASE_NOTES_URL: ${{ secrets.ZHANLU_RELEASE_NOTES_URL }}
+          # zhanlu_change end
         run: ./build.sh
         if: env.SHOULD_BUILD == 'yes'
 
