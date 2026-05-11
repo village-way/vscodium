@@ -30,6 +30,9 @@ DRY_RUN=false
 SOURCE_BRANCH="develop"
 # zhanlu-core 分支 / tag / commit（为空时回退到 upstream/stable.json commit）
 ZHANLU_CORE_REF=""
+# zhanlu_change start - allow release operators to pin the bundled zhanlu-vs source
+ZHANLU_VS_REF=""
+# zhanlu_change end
 # Release 版本：为空时触发前只解析一次，随后传给所有 workflow
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 # 内部 VS Code 兼容版本的 4 位补丁号；为空时 zhanlu-code 会从 RELEASE_VERSION 派生
@@ -73,6 +76,7 @@ VSCodium Stable 版本手动触发脚本
   --platform      指定平台 (macos|linux|windows|all)，默认 all
   --source-branch    zhanlu-code 分支，默认 develop
   --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
+  --zhanlu-vs-ref   zhanlu-vs 分支、标签或 commit/ref，默认按引擎使用 dev_ide_core/develop
   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
   --version-time-patch 指定内部 VS Code 兼容版本的 4 位补丁号（可用 VERSION_TIME_PATCH 环境变量）
   --dry-run       仅显示将要执行的命令，不实际执行
@@ -96,6 +100,10 @@ VSCodium Stable 版本手动触发脚本
 
   # 使用 zhanlu-core 的 master 分支构建（不使用 upstream/stable.json 中的 commit）
   ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref develop --platform all
+
+  # 使用指定 zhanlu-vs 分支、标签或 commit/ref 构建
+  ./scripts/trigger-stable-release.sh --workflow --zhanlu-vs-ref v7.2.40 --platform all
+
   # 使用指定 zhanlu-core 分支和版本构建
   ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref develop --platform all  --release-version 1.0.1
 
@@ -147,6 +155,12 @@ while [[ $# -gt 0 ]]; do
             ZHANLU_CORE_REF="$2"
             shift 2
             ;;
+        # zhanlu_change start - pass a zhanlu-vs ref through manual release triggers
+        --zhanlu-vs-ref)
+            ZHANLU_VS_REF="$2"
+            shift 2
+            ;;
+        # zhanlu_change end
         --release-version)
             RELEASE_VERSION="$2"
             shift 2
@@ -241,21 +255,14 @@ trigger_dispatch() {
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        if [[ -n "${ZHANLU_CORE_REF}" ]]; then
-            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}，client_payload.release_version=${RELEASE_VERSION}，client_payload.version_time_patch=${VERSION_TIME_PATCH}"
-        else
-            print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.release_version=${RELEASE_VERSION}，client_payload.version_time_patch=${VERSION_TIME_PATCH}"
-        fi
+        print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}，client_payload.zhanlu_vs_ref=${ZHANLU_VS_REF}，client_payload.release_version=${RELEASE_VERSION}，client_payload.version_time_patch=${VERSION_TIME_PATCH}" # zhanlu_change
     else
-        if [[ -n "${ZHANLU_CORE_REF}" ]]; then
-            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}, client_payload.release_version=${RELEASE_VERSION}, client_payload.version_time_patch=${VERSION_TIME_PATCH}）"
-        else
-            print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.release_version=${RELEASE_VERSION}, client_payload.version_time_patch=${VERSION_TIME_PATCH}）"
-        fi
+        print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}, client_payload.zhanlu_vs_ref=${ZHANLU_VS_REF}, client_payload.release_version=${RELEASE_VERSION}, client_payload.version_time_patch=${VERSION_TIME_PATCH}）" # zhanlu_change
         python3 -c "import json,sys; payload={'event_type':'stable','client_payload':{'source_branch':sys.argv[1],'release_version':sys.argv[3]}}; \
 if len(sys.argv) > 2 and sys.argv[2]: payload['client_payload']['zhanlu_core_ref']=sys.argv[2]; \
+if len(sys.argv) > 5 and sys.argv[5]: payload['client_payload']['zhanlu_vs_ref']=sys.argv[5]; \
 if len(sys.argv) > 4 and sys.argv[4]: payload['client_payload']['version_time_patch']=sys.argv[4]; \
-print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" "${RELEASE_VERSION}" "${VERSION_TIME_PATCH}" \
+print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" "${RELEASE_VERSION}" "${VERSION_TIME_PATCH}" "${ZHANLU_VS_REF}" \
             | gh api "repos/${REPO}/dispatches" --method POST --input -
     fi
 
@@ -317,6 +324,14 @@ trigger_workflow() {
     else
         print_info "zhanlu-core Ref: 使用 upstream/stable.json 中的 commit"
     fi
+    # zhanlu_change start - pass zhanlu-vs refs to platform workflows
+    if [[ -n "${ZHANLU_VS_REF}" ]]; then
+        wf_fields+=(-f "zhanlu_vs_ref=${ZHANLU_VS_REF}")
+        print_info "zhanlu-vs Ref: ${ZHANLU_VS_REF}"
+    else
+        print_info "zhanlu-vs Ref: 默认引擎分支"
+    fi
+    # zhanlu_change end
 
     for workflow in "${workflows[@]}"; do
         print_info "触发工作流: $workflow"
@@ -361,6 +376,13 @@ main() {
     else
         print_info "zhanlu-core Ref: upstream/stable.json commit"
     fi
+    # zhanlu_change start - surface zhanlu-vs ref choice in trigger summary
+    if [[ -n "${ZHANLU_VS_REF}" ]]; then
+        print_info "zhanlu-vs Ref: $ZHANLU_VS_REF"
+    else
+        print_info "zhanlu-vs Ref: 默认引擎分支"
+    fi
+    # zhanlu_change end
     print_info "仅生成 assets: $GENERATE_ONLY"
     print_info "强制更新版本: $FORCE_VERSION"
     print_info "预览模式: $DRY_RUN"

@@ -7,7 +7,7 @@ set -e
 # 设置默认仓库（如果未设置）- 必须在加载 utils.sh 之前设置
 ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-village-way/vscodium}"
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
-KILO_VERSION="${KILO_VERSION:-1.0.0}"
+KILO_VERSION="${KILO_VERSION:-1.2.0}"
 PRINT_VERSION_ONLY=false
 DRY_RUN_VERSION=false
 
