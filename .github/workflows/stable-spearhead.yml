@@ -2,6 +2,12 @@ name: stable-spearhead
 
 on:
   workflow_dispatch:
+    inputs:
+      # zhanlu_change start - allow spearhead-triggered releases to pin bundled zhanlu-vs source
+      zhanlu_vs_ref:
+        type: string
+        description: Branch, tag, commit, or ref of zhanlu-vs to fetch (optional)
+      # zhanlu_change end
   schedule:
     # Runs at 02:00 Beijing time (18:00 UTC).
     - cron: '0 18 * * *'
@@ -18,6 +24,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
       KILO_VERSION: 1.0.0
       VSCODE_QUALITY: stable
+      ZHANLU_VS_REF: ${{ github.event.inputs.zhanlu_vs_ref || '' }} # zhanlu_change
 
     steps:
       - uses: actions/checkout@v6
@@ -56,10 +63,18 @@ jobs:
 
       - name: Trigger stable platform workflows
         run: |
+          # zhanlu_change start - keep spearhead-triggered platform builds on the requested zhanlu-vs ref
+          zhanlu_vs_args=()
+          if [[ -n "${ZHANLU_VS_REF}" ]]; then
+            zhanlu_vs_args+=(--zhanlu-vs-ref "${ZHANLU_VS_REF}")
+          fi
+          # zhanlu_change end
           bash ./scripts/trigger-stable-release.sh \
             --workflow \
             --zhanlu-core-ref develop \
+            "${zhanlu_vs_args[@]}" \
             --platform all \
             --release-version "${RELEASE_VERSION}"
         env:
           RELEASE_VERSION: ${{ steps.create-release.outputs.release_version }}
+          ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
