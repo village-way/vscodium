@@ -4,15 +4,45 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
+TMP_FILES=()
+
+cleanup() {
+    if [[ "${#TMP_FILES[@]}" -gt 0 ]]; then
+        rm -f "${TMP_FILES[@]}"
+    fi
+}
+
+trap cleanup EXIT
+
+make_tmp() {
+    local file
+    file="$(mktemp)"
+    TMP_FILES+=("${file}")
+    echo "${file}"
+}
+
 # 设置默认仓库（如果未设置）- 必须在加载 utils.sh 之前设置
 ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-village-way/vscodium}"
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 KILO_VERSION="${KILO_VERSION:-1.2.0}"
+GITLAB_HOST="${GITLAB_HOST:-http://gitlab.cmss.com}"
+GITLAB_GROUP="${GITLAB_GROUP:-AI_engine/zhanlu}"
+GITLAB_RELEASE_REPOS="${GITLAB_RELEASE_REPOS:-zhanlu-cloud zhanlu-code zhanlu-core zhanlu-loc zhanlu-vs}"
+ZHANLU_IDE_ROOT="${ZHANLU_IDE_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+GITLAB_FORCE_TAG_UPDATE="${GITLAB_FORCE_TAG_UPDATE:-false}"
 PRINT_VERSION_ONLY=false
 DRY_RUN_VERSION=false
+SYNC_GITLAB=
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -g)
+            SYNC_GITLAB=1
+            shift
+            ;;
         --print-version)
             PRINT_VERSION_ONLY=true
             shift
@@ -23,9 +53,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --help|-h)
             cat << EOF
-Usage: ./create-release.sh [--print-version|--dry-run-version]
+Usage: ./create-release.sh [-g] [--print-version|--dry-run-version]
 
 Options:
+  -g                  同步 GitLab tag 与 Release（默认仅 GitHub）
   --print-version     Print only the resolved release version and exit
   --dry-run-version   Print RELEASE_VERSION=<version> and exit
 EOF
@@ -45,7 +76,153 @@ log_version() {
 }
 
 # 加载工具函数和环境变量
-. ./utils.sh
+. "${SCRIPT_DIR}/utils.sh"
+
+remote_tag_sha() {
+    local dir="$1"
+    local tag="$2"
+    local refs
+    local peeled
+    local direct
+
+    refs="$(git -C "${dir}" ls-remote origin "refs/tags/${tag}" "refs/tags/${tag}^{}")"
+    peeled="$(printf "%s\n" "${refs}" | awk '/\^\{\}$/ {print $1; exit}')"
+    if [[ -n "${peeled}" ]]; then
+        echo "${peeled}"
+        return
+    fi
+
+    direct="$(printf "%s\n" "${refs}" | awk '{print $1; exit}')"
+    if [[ -n "${direct}" ]]; then
+        echo "${direct}"
+    fi
+}
+
+ensure_gitlab_tag() {
+    local dir="$1"
+    local tag="$2"
+    local sha="$3"
+    local remote
+    local local_sha
+    local push_nv=()
+
+    if [[ "$(basename "${dir}")" == "zhanlu-core" ]]; then
+        push_nv=(--no-verify)
+    fi
+
+    remote="$(remote_tag_sha "${dir}" "${tag}")"
+    if [[ -z "${remote}" ]]; then
+        if git -C "${dir}" rev-parse -q --verify "refs/tags/${tag}" &>/dev/null; then
+            local_sha="$(git -C "${dir}" rev-list -n 1 "refs/tags/${tag}")"
+            if [[ "${local_sha}" != "${sha}" ]]; then
+                git -C "${dir}" tag -f "${tag}" "${sha}"
+            fi
+        else
+            git -C "${dir}" tag "${tag}" "${sha}"
+        fi
+
+        git -C "${dir}" push "${push_nv[@]}" origin "refs/tags/${tag}"
+        echo "GitLab tag ${tag} 已推送"
+        return
+    fi
+
+    if [[ "${remote}" == "${sha}" ]]; then
+        echo "GitLab tag ${tag} 已存在且指向当前提交"
+        return
+    fi
+
+    if [[ "${GITLAB_FORCE_TAG_UPDATE}" != "true" ]]; then
+        echo "错误: GitLab tag ${tag} 已存在但指向不同提交"
+        echo "  remote: ${remote}"
+        echo "  target: ${sha}"
+        echo "如需强制移动 tag，请设置 GITLAB_FORCE_TAG_UPDATE=true"
+        exit 1
+    fi
+
+    git -C "${dir}" tag -f "${tag}" "${sha}"
+    git -C "${dir}" push "${push_nv[@]}" -f origin "refs/tags/${tag}"
+    echo "GitLab tag ${tag} 已强制更新"
+}
+
+write_gitlab_notes() {
+    local repo="$1"
+    local dir="$2"
+    local tag="$3"
+    local sha="$4"
+    local file="$5"
+    local short
+    local prev
+    local range
+    local commits
+
+    short="$(git -C "${dir}" rev-parse --short "${sha}")"
+    prev="$(git -C "${dir}" describe --tags --abbrev=0 --exclude "${tag}" "${sha}" 2>/dev/null || true)"
+
+    if [[ -n "${prev}" ]]; then
+        range="${prev}..${short}"
+        commits="$(git -C "${dir}" log --no-merges --oneline "${prev}..${sha}")"
+    else
+        range="initial history through ${short}"
+        commits="$(git -C "${dir}" log --no-merges --oneline -20 "${sha}")"
+    fi
+
+    {
+        echo "# ${tag}"
+        echo
+        echo "- Repository: ${repo}"
+        echo "- Commit: ${short}"
+        echo "- Range: ${range}"
+        echo
+        echo "## Commits"
+        echo
+        if [[ -n "${commits}" ]]; then
+            printf "%s\n" "${commits}" | sed "s/^/- /"
+        else
+            echo "- No commit changes since previous tag."
+        fi
+    } > "${file}"
+}
+
+sync_gitlab_releases() {
+    if ! command -v glab &>/dev/null; then
+        echo "错误: 未找到 glab，请先安装 GitLab CLI"
+        exit 1
+    fi
+
+    if [[ -z "${GITLAB_TOKEN:-}" && -z "${GITLAB_ACCESS_TOKEN:-}" ]]; then
+        echo "错误: 请通过 GITLAB_TOKEN 或 GITLAB_ACCESS_TOKEN 提供 GitLab token"
+        exit 1
+    fi
+
+    echo "同步 GitLab Release: ${GITLAB_TAG}"
+
+    local repo
+    for repo in ${GITLAB_RELEASE_REPOS}; do
+        local dir="${ZHANLU_IDE_ROOT}/${repo}"
+        local project="${GITLAB_HOST%/}/${GITLAB_GROUP}/${repo}"
+        local sha
+        local notes
+
+        if [[ ! -d "${dir}/.git" && ! -f "${dir}/.git" ]]; then
+            echo "错误: ${dir} 不是 git 仓库"
+            exit 1
+        fi
+
+        sha="$(git -C "${dir}" rev-parse HEAD)"
+        echo "处理 ${repo}: ${sha}"
+
+        ensure_gitlab_tag "${dir}" "${GITLAB_TAG}" "${sha}"
+
+        notes="$(make_tmp)"
+        write_gitlab_notes "${repo}" "${dir}" "${GITLAB_TAG}" "${sha}" "${notes}"
+
+        glab release create "${GITLAB_TAG}" \
+            --repo "${project}" \
+            --ref "${sha}" \
+            --name "${GITLAB_TAG}" \
+            --notes-file "${notes}"
+    done
+}
 
 # 动态获取版本号
 # 优先从环境变量 RELEASE_VERSION 获取
@@ -99,6 +276,14 @@ elif [[ "${DRY_RUN_VERSION}" == "true" ]]; then
     exit 0
 fi
 
+RELEASE_DATE="${RELEASE_DATE:-$(date +%Y%m%d)}"
+if [[ ! "${RELEASE_DATE}" =~ ^[0-9]{8}$ ]]; then
+    echo "错误: RELEASE_DATE 格式不正确，请使用 YYYYMMDD: ${RELEASE_DATE}"
+    exit 1
+fi
+
+GITLAB_TAG="release_zhanlu-ide_v${VERSION}_${RELEASE_DATE}"
+
 # 检查 release 是否已存在
 if gh release view "${VERSION}" --repo "${ASSETS_REPOSITORY}" &>/dev/null; then
     echo "Release ${VERSION} 已存在，将更新 release notes"
@@ -131,7 +316,7 @@ if [[ "${VSCODE_QUALITY}" == "stable" ]] && [[ "${UPDATE_EXISTING}" == "false" ]
         --title "${VERSION}" \
         --generate-notes \
         --draft=false
-    
+
     # 获取自动生成的 release notes
     RELEASE_NOTES=$( gh release view "${VERSION}" --repo "${ASSETS_REPOSITORY}" --json "body" --jq ".body" )
 else
@@ -147,7 +332,7 @@ if [[ ! -f "release_notes.md" ]]; then
     else
         NOTES="${RELEASE_NOTES:-Release ${VERSION}}"
     fi
-    
+
     if [[ "${UPDATE_EXISTING}" == "true" ]]; then
         gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}"
     else
@@ -156,69 +341,71 @@ if [[ ! -f "release_notes.md" ]]; then
             gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}"
         fi
     fi
+    [[ -n "${SYNC_GITLAB}" ]] && sync_gitlab_releases
     exit 0
 fi
 
 # 复制模板文件用于处理
-cp release_notes.md release_notes.tmp.md
+RELEASE_NOTES_FILE="$(make_tmp)"
+cp release_notes.md "${RELEASE_NOTES_FILE}"
 
 # 替换模板中的占位符
 if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
-    replace "s|@@APP_NAME@@|${APP_NAME}|g" release_notes.tmp.md
-    replace "s|@@APP_NAME_LC@@|${APP_NAME_LC}|g" release_notes.tmp.md
-    replace "s|@@APP_NAME_QUALITY@@|${APP_NAME}-Insiders|g" release_notes.tmp.md
-    replace "s|@@ASSETS_REPOSITORY@@|${ASSETS_REPOSITORY}|g" release_notes.tmp.md
-    replace "s|@@BINARY_NAME@@|${BINARY_NAME}|g" release_notes.tmp.md
-    replace "s|@@MS_TAG@@|${MS_COMMIT:-${MS_TAG}}|g" release_notes.tmp.md
-    replace "s|@@MS_URL@@|https://github.com/microsoft/vscode/tree/${MS_COMMIT:-${MS_TAG}}|g" release_notes.tmp.md
-    replace "s|@@QUALITY@@|-insider|g" release_notes.tmp.md
-    replace "s|@@RELEASE_NOTES@@||g" release_notes.tmp.md
-    replace "s|@@VERSION@@|${VERSION_CLEAN}|g" release_notes.tmp.md
+    replace "s|@@APP_NAME@@|${APP_NAME}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@APP_NAME_LC@@|${APP_NAME_LC}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@APP_NAME_QUALITY@@|${APP_NAME}-Insiders|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@ASSETS_REPOSITORY@@|${ASSETS_REPOSITORY}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@BINARY_NAME@@|${BINARY_NAME}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@MS_TAG@@|${MS_COMMIT:-${MS_TAG}}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@MS_URL@@|https://github.com/microsoft/vscode/tree/${MS_COMMIT:-${MS_TAG}}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@QUALITY@@|-insider|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@RELEASE_NOTES@@||g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@VERSION@@|${VERSION_CLEAN}|g" "${RELEASE_NOTES_FILE}"
 else
-    replace "s|@@APP_NAME@@|${APP_NAME}|g" release_notes.tmp.md
-    replace "s|@@APP_NAME_LC@@|${APP_NAME_LC}|g" release_notes.tmp.md
-    replace "s|@@APP_NAME_QUALITY@@|${APP_NAME}|g" release_notes.tmp.md
-    replace "s|@@ASSETS_REPOSITORY@@|${ASSETS_REPOSITORY}|g" release_notes.tmp.md
-    replace "s|@@BINARY_NAME@@|${BINARY_NAME}|g" release_notes.tmp.md
-    replace "s|@@MS_TAG@@|${MS_TAG}|g" release_notes.tmp.md
-    
+    replace "s|@@APP_NAME@@|${APP_NAME}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@APP_NAME_LC@@|${APP_NAME_LC}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@APP_NAME_QUALITY@@|${APP_NAME}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@ASSETS_REPOSITORY@@|${ASSETS_REPOSITORY}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@BINARY_NAME@@|${BINARY_NAME}|g" "${RELEASE_NOTES_FILE}"
+    replace "s|@@MS_TAG@@|${MS_TAG}|g" "${RELEASE_NOTES_FILE}"
+
     # 生成 VS Code 更新日志链接
     MS_VERSION_PARTS=$(echo "${MS_TAG}" | tr '.' '_')
     MS_VERSION_MAJOR_MINOR=$(echo "${MS_VERSION_PARTS}" | cut -d'_' -f 1,2)
     MS_URL="https://code.visualstudio.com/updates/v${MS_VERSION_MAJOR_MINOR}"
-    replace "s|@@MS_URL@@|${MS_URL}|g" release_notes.tmp.md
-    
-    replace "s|@@QUALITY@@||g" release_notes.tmp.md
+    replace "s|@@MS_URL@@|${MS_URL}|g" "${RELEASE_NOTES_FILE}"
+
+    replace "s|@@QUALITY@@||g" "${RELEASE_NOTES_FILE}"
     # 转义换行符：将实际的换行符替换为 \n（与 release.sh 一致）
     if [[ -n "${RELEASE_NOTES}" ]]; then
         ESCAPED_NOTES="${RELEASE_NOTES//$'\n'/\\n}"
-        replace "s|@@RELEASE_NOTES@@|${ESCAPED_NOTES}|g" release_notes.tmp.md
+        replace "s|@@RELEASE_NOTES@@|${ESCAPED_NOTES}|g" "${RELEASE_NOTES_FILE}"
     else
-        replace "s|@@RELEASE_NOTES@@||g" release_notes.tmp.md
+        replace "s|@@RELEASE_NOTES@@||g" "${RELEASE_NOTES_FILE}"
     fi
-    replace "s|@@VERSION@@|${VERSION_CLEAN}|g" release_notes.tmp.md
+    replace "s|@@VERSION@@|${VERSION_CLEAN}|g" "${RELEASE_NOTES_FILE}"
 fi
 
 # 创建或更新 release
 if [[ "${UPDATE_EXISTING}" == "true" ]]; then
     echo "更新 Release notes..."
-    gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file release_notes.tmp.md
+    gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}"
 else
     if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
         # Insider 版本直接创建
         gh release create "${VERSION}" \
             --repo "${ASSETS_REPOSITORY}" \
             --title "${VERSION}" \
-            --notes-file release_notes.tmp.md \
+            --notes-file "${RELEASE_NOTES_FILE}" \
             --draft=false
     else
         # Stable 版本更新已创建的 release
-        gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file release_notes.tmp.md
+        gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}"
     fi
 fi
 
-# 清理临时文件
-rm -f release_notes.tmp.md
+[[ -n "${SYNC_GITLAB}" ]] && sync_gitlab_releases
 
 echo "Release ${VERSION} 创建/更新完成！"
 echo "RELEASE_VERSION=${VERSION}"
+[[ -n "${SYNC_GITLAB}" ]] && echo "GITLAB_RELEASE_TAG=${GITLAB_TAG}"
