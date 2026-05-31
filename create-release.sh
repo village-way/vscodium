@@ -404,8 +404,14 @@ else
     fi
 fi
 
-[[ -n "${SYNC_GITLAB}" ]] && sync_gitlab_releases
+if [[ -n "${SYNC_GITLAB}" ]]; then
+    sync_gitlab_releases
+fi
 
 echo "Release ${VERSION} 创建/更新完成！"
 echo "RELEASE_VERSION=${VERSION}"
-[[ -n "${SYNC_GITLAB}" ]] && echo "GITLAB_RELEASE_TAG=${GITLAB_TAG}"
+if [[ -n "${SYNC_GITLAB}" ]]; then
+    echo "GITLAB_RELEASE_TAG=${GITLAB_TAG}"
+fi
+
+exit 0
