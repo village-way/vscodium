@@ -138,6 +138,7 @@ FILES_TO_COPY=(
     "prepare_assets.sh"
     "prepare_checksums.sh"
     "prepare_src.sh"
+    "prepare_zhanlu_cli_assets.sh" # zhanlu_change - copy standalone CLI compatibility asset builder
     "prepare_vscode.sh"
     "prepare_zhanlu.sh"
     "prepare_zhanlu_loc.sh"

@@ -398,6 +398,74 @@ jobs:
         # zhanlu_change - mirror prepare_assets: artifact on release builds too (not only --generate)
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && (env.SHOULD_DEPLOY == 'yes' || github.event.inputs.generate_assets == 'true')
 
+  # zhanlu_change start - publish extra standalone CLI variants from opencode's full cross-platform build
+  zhanlu_cli_compat:
+    needs:
+      - check
+    runs-on: ubuntu-22.04
+    env:
+      MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
+      MS_TAG: ${{ needs.check.outputs.MS_TAG }}
+      RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
+      RELEASE_VERSION_EXPLICIT: ${{ needs.check.outputs.RELEASE_VERSION_EXPLICIT }}
+      SHOULD_BUILD: ${{ (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true') && 'yes' || 'no' }}
+      SHOULD_DEPLOY: ${{ needs.check.outputs.SHOULD_DEPLOY }}
+    if: needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true'
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.GITHUB_BRANCH }}
+        if: env.SHOULD_BUILD == 'yes'
+
+      - name: Fetch source code from private repository
+        env:
+          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+        run: ./fetch_source.sh
+        if: env.SHOULD_BUILD == 'yes'
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+        if: env.SHOULD_BUILD == 'yes'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.13'
+        if: env.SHOULD_BUILD == 'yes'
+
+      - name: Install zip
+        run: sudo apt-get update -y && sudo apt-get install -y zip
+        if: env.SHOULD_BUILD == 'yes'
+
+      - name: Prepare Zhanlu CLI compatibility assets
+        env:
+          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+        run: bash ./prepare_zhanlu_cli_assets.sh
+        if: env.SHOULD_BUILD == 'yes'
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
+          GITHUB_USERNAME: ${{ github.repository_owner }}
+        run: ./release.sh
+        if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'yes'
+
+      - name: Upload assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: zhanlu-cli-compat
+          path: assets/
+          retention-days: 3
+        if: env.SHOULD_BUILD == 'yes' && (env.SHOULD_DEPLOY == 'yes' || github.event.inputs.generate_assets == 'true')
+  # zhanlu_change end
+
   reh_linux:
     needs:
       - check
