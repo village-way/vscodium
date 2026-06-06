@@ -162,6 +162,10 @@ jobs:
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes'
 
+      - name: Get Open Remote SSH / WSL builtin extensions
+        run: ./get_zhanlu_remote_exts.sh
+        if: env.SHOULD_BUILD == 'yes'
+
       - name: Build
         env:
           SHOULD_BUILD_REH: 'no'

@@ -208,6 +208,10 @@ jobs:
         run: ./get_zhanlu_loc.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
+      - name: Get Open Remote SSH / WSL builtin extensions
+        run: ./get_zhanlu_remote_exts.sh
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+
       - name: Build
         env:
           SHOULD_BUILD_REH: 'no'
@@ -363,6 +367,10 @@ jobs:
           ZHANLU_LOC_REPO_URL: https://github.com/village-way/zhanlu-loc.git
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_zhanlu_loc.sh
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+
+      - name: Get Open Remote SSH / WSL builtin extensions
+        run: ./get_zhanlu_remote_exts.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
       - name: Build
