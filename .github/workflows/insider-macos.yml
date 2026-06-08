@@ -25,15 +25,17 @@ on:
     - '**/*.md'
 
 env:
-  APP_NAME: VSCodium
+  APP_NAME: Zhanlu # zhanlu_change - Insider keeps Zhanlu branding
+  APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - prepare_vscode derives Ecloud.Zhanlu.Insiders
   ASSETS_REPOSITORY: ${{ github.repository }}-insiders
-  BINARY_NAME: codium-insiders
-  GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'insider' }}
+  BINARY_NAME: zhanlu-insiders # zhanlu_change - Insider asset/package names use the final binary name
+  GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }} # zhanlu_change - wrapper checkout follows the triggering ref
   GH_REPO_PATH: ${{ github.repository }}
-  ORG_NAME: ${{ github.repository_owner }}
+  ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
   OS_NAME: osx
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: insider
+  ZHANLU_CODE_SOURCE_BRANCH: develop # zhanlu_change - wrapper workflow fetches zhanlu-code before source-owned scripts
 
 jobs:
   build:
@@ -53,6 +55,13 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.GITHUB_BRANCH }}
+
+      - name: Fetch source code from private repository
+        env:
+          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+        run: ./fetch_source.sh # zhanlu_change - build scripts live in zhanlu-code
 
       - name: Switch to relevant branch
         env:

@@ -17,12 +17,14 @@ jobs:
     runs-on: macos-14
     env:
       APP_NAME: Zhanlu
+      APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
       ASSETS_REPOSITORY: ${{ github.repository }}
       BINARY_NAME: zhanlu
       GH_REPO_PATH: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
       KILO_VERSION: 1.0.0
+      ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
       VSCODE_QUALITY: stable
       ZHANLU_VS_REF: ${{ github.event.inputs.zhanlu_vs_ref || '' }} # zhanlu_change
 

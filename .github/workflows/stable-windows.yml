@@ -39,11 +39,12 @@ on:
 
 env:
   APP_NAME: Zhanlu
+  APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
   ASSETS_REPOSITORY: ${{ github.repository }}
   BINARY_NAME: zhanlu
   COMPANY_NAME_EN: China Mobile (Suzhou) Software Technology Co., Ltd.
   GH_REPO_PATH: ${{ github.repository }}
-  ORG_NAME: ecloud
+  ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
   OS_NAME: windows
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
@@ -448,13 +449,20 @@ jobs:
       run:
         shell: bash
     env:
-      APP_IDENTIFIER: VSCodium.VSCodium
+      APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - publish Zhanlu under its own winget id
     if: needs.build.outputs.SHOULD_DEPLOY == 'yes' && github.event.inputs.publish_winget == 'true'
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.GITHUB_BRANCH }}
+
+      - name: Fetch source code from private repository
+        env:
+          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+        run: ./fetch_source.sh # zhanlu_change - WinGet helper scripts live in zhanlu-code
 
       - name: Check version
         run: ./stores/winget/check_version.sh

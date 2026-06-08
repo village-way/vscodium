@@ -35,10 +35,11 @@ on:
 
 env:
   APP_NAME: Zhanlu
+  APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
   ASSETS_REPOSITORY: ${{ github.repository }}
   BINARY_NAME: zhanlu
   GH_REPO_PATH: ${{ github.repository }}
-  ORG_NAME: ecloud
+  ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
   OS_NAME: osx
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable

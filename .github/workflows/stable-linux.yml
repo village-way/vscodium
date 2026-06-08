@@ -36,11 +36,12 @@ on:
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   APP_NAME: Zhanlu
+  APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
   ASSETS_REPOSITORY: ${{ github.repository }}
   BINARY_NAME: zhanlu
   DISABLE_UPDATE: 'yes'
   GH_REPO_PATH: ${{ github.repository }}
-  ORG_NAME: ecloud
+  ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
   OS_NAME: linux
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
@@ -704,9 +705,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - package_name: vscodium
+        - package_name: zhanlu # zhanlu_change - AUR publication should use Zhanlu package identity
           package_type: stable
-        # - package_name: vscodium-git
+        # - package_name: zhanlu-git # zhanlu_change
         #   package_type: rolling
     # Disabled: AUR publishing requires AUR_PRIVATE_KEY secret
     if: false && needs.check.outputs.SHOULD_DEPLOY == 'yes'
@@ -728,7 +729,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
-      SNAP_NAME: codium
+      SNAP_NAME: zhanlu # zhanlu_change - Snap package keeps lowercase Zhanlu binary/package name
     strategy:
       fail-fast: false
       matrix:
@@ -822,5 +823,5 @@ jobs:
         uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          repository: VSCodium/repositories-linux
+          repository: ${{ vars.LINUX_REPOSITORIES_REPO || 'village-way/zhanlu-repositories-linux' }} # zhanlu_change - avoid dispatching Zhanlu releases to VSCodium
           event-type: deploy
