@@ -41,6 +41,7 @@ env:
   BINARY_NAME: zhanlu
   DISABLE_UPDATE: 'yes'
   GH_REPO_PATH: ${{ github.repository }}
+  ZHANLU_PUBLIC_URL: https://ecloud.10086.cn/api/query/zhanlu-cloud # zhanlu_change - public product homepage for Linux metadata
   ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
   OS_NAME: linux
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions

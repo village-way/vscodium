@@ -6,6 +6,7 @@ ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-village-way/zhanlu-code}" # zhanlu_chang
 BINARY_NAME="${BINARY_NAME:-zhanlu}"
 COMPANY_NAME_EN="${COMPANY_NAME_EN:-China Mobile (Suzhou) Software Technology Co., Ltd.}" # zhanlu_change - keep Windows publisher display separate from technical org id
 GH_REPO_PATH="${GH_REPO_PATH:-village-way/zhanlu-code}" # zhanlu_change - default links belong to Zhanlu
+ZHANLU_PUBLIC_URL="${ZHANLU_PUBLIC_URL:-https://ecloud.10086.cn/api/query/zhanlu-cloud}" # zhanlu_change - public product homepage
 # zhanlu_change start - keep wrapper defaults aligned with fetched Zhanlu source
 APP_IDENTIFIER="${APP_IDENTIFIER:-Ecloud.Zhanlu}"
 APP_IDENTIFIER_BASE="${APP_IDENTIFIER%.Insiders}"
