@@ -109,9 +109,13 @@ update vscode to [@@MS_TAG@@](@@MS_URL@@)
     <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/@@APP_NAME_LC@@-cli-darwin-x64-@@VERSION@@@@QUALITY@@.tar.gz">@@APP_NAME_LC@@-cli-darwin-x64-@@VERSION@@@@QUALITY@@.tar.gz</a></td>
   </tr>
   <tr>
-  <td rowspan="8">Linux</td>
+  <td rowspan="9">Linux</td>
     <td>.deb</td>
     <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/@@BINARY_NAME@@_@@VERSION@@_amd64.deb">@@BINARY_NAME@@_@@VERSION@@_amd64.deb</a></td>
+  </tr>
+  <tr>
+    <td>.deb (baseline CLI)</td>
+    <td><a href="https://github.com/@@ASSETS_REPOSITORY@@/releases/download/@@VERSION@@@@QUALITY@@/@@BINARY_NAME@@_@@VERSION@@_amd64-baseline.deb">@@BINARY_NAME@@_@@VERSION@@_amd64-baseline.deb</a></td> <!-- zhanlu_change - Linux x64 deb with baseline CLI -->
   </tr>
   <tr>
     <td>.rpm</td>
