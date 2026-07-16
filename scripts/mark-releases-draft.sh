@@ -13,6 +13,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../utils.sh
+. "${SCRIPT_DIR}/../utils.sh"
+
 REPO="village-way/vscodium"
 LIMIT=1000
 APPLY=false
@@ -119,7 +123,14 @@ retry_cmd() {
 }
 
 list_releases_json() {
-  retry_cmd gh release list --repo "${REPO}" --limit "${LIMIT}" --json tagName,isDraft
+  # gh release list --json requires a newer gh than 2.42; use REST for compatibility.
+  # --paginate emits one JSON array per page; jq -s 'add' merges them.
+  local raw
+  if ! raw="$(retry_cmd gh api --paginate "repos/${REPO}/releases?per_page=100")"; then
+    return 1
+  fi
+  echo "${raw}" | jq -s --argjson limit "${LIMIT}" \
+    'add // [] | map({tagName: .tag_name, isDraft: .draft}) | .[:$limit]'
 }
 
 # Return 0 if tag is still a published (non-draft) release; 1 if draft/absent; 2 if lookup failed.
@@ -206,6 +217,7 @@ while IFS= read -r TAG; do
   fi
 
   if retry_cmd gh release edit "${TAG}" --repo "${REPO}" --draft >/dev/null; then
+    sync_release_download_ref "${REPO}" "${TAG}" "--draft" || echo "  warn: could not refresh download links in release notes for ${TAG}" >&2
     echo "  OK: ${TAG}"
     OK=$((OK + 1))
     continue
@@ -216,6 +228,7 @@ while IFS= read -r TAG; do
   status=0
   is_published_release "${TAG}" || status=$?
   if [[ "${status}" -eq 1 ]]; then
+    sync_release_download_ref "${REPO}" "${TAG}" "--draft" || echo "  warn: could not refresh download links in release notes for ${TAG}" >&2
     echo "  OK (verified not published after retry): ${TAG}"
     OK=$((OK + 1))
     continue
