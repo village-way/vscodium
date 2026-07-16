@@ -246,6 +246,40 @@ resolve_release_version() {
     fi
 }
 
+# zhanlu_change start - pre-create the exact draft before concurrent platform uploads
+ensure_release_target() {
+    if [[ "${GENERATE_ONLY}" == true ]]; then
+        return
+    fi
+
+    local release_draft="${RELEASE_DRAFT:-true}"
+    local wants_draft=true
+    case "${release_draft}" in
+        false|FALSE|0|no|NO)
+            wants_draft=false
+            ;;
+    esac
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        print_info "将确保 Release ${RELEASE_VERSION} 存在且 draft=${wants_draft}"
+        return
+    fi
+
+    local existing_is_draft
+    if existing_is_draft=$(gh release view "${RELEASE_VERSION}" --repo "${REPO}" --json isDraft --jq '.isDraft' 2>/dev/null); then
+        if [[ "${wants_draft}" == true && "${existing_is_draft}" != true ]]; then
+            print_error "Release ${RELEASE_VERSION} 已正式发布，拒绝在触发构建时自动改回 draft"
+            print_error "请指定新的 --release-version，或先显式执行 gh release edit ${RELEASE_VERSION} --repo ${REPO} --draft"
+            exit 1
+        fi
+    else
+        print_info "预创建 Release ${RELEASE_VERSION}（draft=${wants_draft}）..."
+    fi
+
+    RELEASE_VERSION="${RELEASE_VERSION}" RELEASE_DRAFT="${release_draft}" ./create-release.sh
+}
+# zhanlu_change end
+
 # 使用 repository_dispatch 触发
 trigger_dispatch() {
     print_info "使用 repository_dispatch 触发 stable 构建..."
@@ -329,7 +363,7 @@ trigger_workflow() {
         wf_fields+=(-f "zhanlu_vs_ref=${ZHANLU_VS_REF}")
         print_info "zhanlu-vs Ref: ${ZHANLU_VS_REF}"
     else
-        print_info "zhanlu-vs Ref: 默认引擎分支"
+        print_info "zhanlu-vs Ref: 默认 develop"
     fi
     # zhanlu_change end
 
@@ -362,6 +396,7 @@ main() {
     check_gh_cli
     get_repo_info
     resolve_release_version
+    ensure_release_target # zhanlu_change - pin visibility and download ref before dispatch
 
     echo ""
     print_info "触发模式: $TRIGGER_MODE"
@@ -380,7 +415,7 @@ main() {
     if [[ -n "${ZHANLU_VS_REF}" ]]; then
         print_info "zhanlu-vs Ref: $ZHANLU_VS_REF"
     else
-        print_info "zhanlu-vs Ref: 默认引擎分支"
+        print_info "zhanlu-vs Ref: 默认 develop"
     fi
     # zhanlu_change end
     print_info "仅生成 assets: $GENERATE_ONLY"
