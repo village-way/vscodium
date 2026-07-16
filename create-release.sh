@@ -284,6 +284,20 @@ fi
 
 GITLAB_TAG="release_zhanlu-ide_v${VERSION}_${RELEASE_DATE}"
 
+# zhanlu_change start - default GitHub releases to draft; set RELEASE_DRAFT=false to publish
+RELEASE_DRAFT="${RELEASE_DRAFT:-true}"
+case "${RELEASE_DRAFT}" in
+    false|FALSE|0|no|NO)
+        DRAFT_FLAG="--draft=false"
+        echo "RELEASE_DRAFT=${RELEASE_DRAFT}: creating/updating as published release"
+        ;;
+    *)
+        DRAFT_FLAG="--draft"
+        echo "RELEASE_DRAFT=${RELEASE_DRAFT}: creating/updating as draft release"
+        ;;
+esac
+# zhanlu_change end
+
 # 检查 release 是否已存在
 if gh release view "${VERSION}" --repo "${ASSETS_REPOSITORY}" &>/dev/null; then
     echo "Release ${VERSION} 已存在，将更新 release notes"
@@ -315,7 +329,7 @@ if [[ "${VSCODE_QUALITY}" == "stable" ]] && [[ "${UPDATE_EXISTING}" == "false" ]
         --repo "${ASSETS_REPOSITORY}" \
         --title "${VERSION}" \
         --generate-notes \
-        --draft=false
+        "${DRAFT_FLAG}" # zhanlu_change - honor RELEASE_DRAFT
 
     # 获取自动生成的 release notes
     RELEASE_NOTES=$( gh release view "${VERSION}" --repo "${ASSETS_REPOSITORY}" --json "body" --jq ".body" )
@@ -323,6 +337,18 @@ else
     # Insider 版本或更新现有 release
     RELEASE_NOTES=""
 fi
+
+# zhanlu_change start - create new Insider drafts before rendering their asset URLs
+if [[ "${VSCODE_QUALITY}" == "insider" ]] && [[ "${UPDATE_EXISTING}" == "false" ]]; then
+    gh release create "${VERSION}" \
+        --repo "${ASSETS_REPOSITORY}" \
+        --title "${VERSION}" \
+        --notes "Preparing ${VERSION} release assets." \
+        "${DRAFT_FLAG}"
+fi
+
+gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" "${DRAFT_FLAG}"
+# zhanlu_change end
 
 # 检查 release_notes.md 模板是否存在
 if [[ ! -f "release_notes.md" ]]; then
@@ -334,11 +360,11 @@ if [[ ! -f "release_notes.md" ]]; then
     fi
 
     if [[ "${UPDATE_EXISTING}" == "true" ]]; then
-        gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}"
+        gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}" "${DRAFT_FLAG}" # zhanlu_change
     else
         # 如果已经创建了，就更新
         if [[ "${VSCODE_QUALITY}" == "stable" ]]; then
-            gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}"
+            gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}" "${DRAFT_FLAG}" # zhanlu_change
         fi
     fi
     [[ -n "${SYNC_GITLAB}" ]] && sync_gitlab_releases
@@ -386,23 +412,11 @@ else
     replace "s|@@VERSION@@|${VERSION_CLEAN}|g" "${RELEASE_NOTES_FILE}"
 fi
 
-# 创建或更新 release
-if [[ "${UPDATE_EXISTING}" == "true" ]]; then
-    echo "更新 Release notes..."
-    gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}"
-else
-    if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
-        # Insider 版本直接创建
-        gh release create "${VERSION}" \
-            --repo "${ASSETS_REPOSITORY}" \
-            --title "${VERSION}" \
-            --notes-file "${RELEASE_NOTES_FILE}" \
-            --draft=false
-    else
-        # Stable 版本更新已创建的 release
-        gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}"
-    fi
-fi
+# zhanlu_change start - the release already exists so its real download ref can be rendered
+echo "更新 Release notes..."
+gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}" "${DRAFT_FLAG}"
+sync_release_download_ref "${ASSETS_REPOSITORY}" "${VERSION}" "${DRAFT_FLAG}"
+# zhanlu_change end
 
 if [[ -n "${SYNC_GITLAB}" ]]; then
     sync_gitlab_releases

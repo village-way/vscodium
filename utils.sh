@@ -87,3 +87,58 @@ if ! exists gsed; then
     }
   fi
 fi
+
+# zhanlu_change start - keep draft release notes download paths on the stable tag name
+get_release_download_ref() {
+  local repo="${1:?}"
+  local tag="${2:?}"
+
+  gh release view "${tag}" --repo "${repo}" --json url --jq '.url | split("/")[-1]' 2>/dev/null
+}
+
+get_release_draft_flag() {
+  local repo="${1:?}"
+  local tag="${2:?}"
+  local is_draft
+
+  is_draft="$(gh release view "${tag}" --repo "${repo}" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+  if [[ "${is_draft}" == "true" ]]; then
+    echo "--draft"
+  else
+    echo "--draft=false"
+  fi
+}
+
+sync_release_download_ref() {
+  local repo="${1:?}"
+  local tag="${2:?}"
+  local draft_flag="${3:-}"
+  local body tmp
+
+  body="$(gh release view "${tag}" --repo "${repo}" --json body --jq '.body // ""' 2>/dev/null || true)"
+  if [[ -z "${body}" ]] || ! printf '%s' "${body}" | grep -q 'releases/download/'; then
+    return 0
+  fi
+
+  if ! printf '%s' "${body}" | grep -oE 'releases/download/[^/" ]+' | sed 's|releases/download/||' | sort -u | grep -qv "^${tag}$"; then
+    return 0
+  fi
+
+  tmp="$(mktemp)"
+  printf '%s' "${body}" > "${tmp}"
+  replace "s|releases/download/[^/\" ]+/|releases/download/${tag}/|g" "${tmp}"
+
+  if cmp -s <(printf '%s' "${body}") "${tmp}"; then
+    rm -f "${tmp}"
+    return 0
+  fi
+
+  echo "Syncing release notes download paths for '${tag}' to tag-based URLs"
+  if [[ -n "${draft_flag}" ]]; then
+    gh release edit "${tag}" --repo "${repo}" --notes-file "${tmp}" "${draft_flag}"
+  else
+    gh release edit "${tag}" --repo "${repo}" --notes-file "${tmp}"
+  fi
+  rm -f "${tmp}"
+}
+# zhanlu_change end
