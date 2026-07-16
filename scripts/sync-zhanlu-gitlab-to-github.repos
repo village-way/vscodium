@@ -1,0 +1,6 @@
+# name<TAB>gitlab_url<TAB>github_url<TAB>default_branch
+zhanlu-code	http://gitlab.cmss.com/AI_engine/zhanlu/zhanlu-code.git	https://github.com/village-way/zhanlu-code.git	develop
+zhanlu-vs	http://gitlab.cmss.com/AI_engine/zhanlu/zhanlu-vs.git	https://github.com/village-way/zhanlu-vs.git	develop
+zhanlu-core	http://gitlab.cmss.com/AI_engine/zhanlu/zhanlu-core.git	https://github.com/village-way/zhanlu-core.git	develop
+zhanlu-loc	http://gitlab.cmss.com/AI_engine/zhanlu/zhanlu-loc.git	https://github.com/village-way/zhanlu-loc.git	develop
+zhanlu-cloud	http://gitlab.cmss.com/AI_engine/zhanlu/zhanlu-cloud.git	https://github.com/village-way/zhanlu-cloud.git	develop
