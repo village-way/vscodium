@@ -76,7 +76,7 @@ VSCodium Stable 版本手动触发脚本
   --platform      指定平台 (macos|linux|windows|all)，默认 all
   --source-branch    zhanlu-code 分支，默认 develop
   --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
-  --zhanlu-vs-ref   zhanlu-vs 分支、标签或 commit/ref，默认按引擎使用 dev_ide_core/develop
+  --zhanlu-vs-ref   zhanlu-vs 分支、标签或 commit/ref，默认使用 develop
   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
   --version-time-patch 指定内部 VS Code 兼容版本的 4 位补丁号（可用 VERSION_TIME_PATCH 环境变量）
   --dry-run       仅显示将要执行的命令，不实际执行

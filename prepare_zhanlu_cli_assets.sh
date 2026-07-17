@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 ZHANLU_REPO_URL="${ZHANLU_REPO_URL:-https://github.com/village-way/zhanlu-vs.git}"
-ZHANLU_BRANCH="${ZHANLU_BRANCH:-dev_ide_core}"
+ZHANLU_BRANCH="${ZHANLU_BRANCH:-develop}"
 ZHANLU_VS_REF="${ZHANLU_VS_REF:-}"
 ZHANLU_DIR="${SCRIPT_DIR}/zhanlu-vs"
 RELEASE_VERSION="${RELEASE_VERSION:-}"

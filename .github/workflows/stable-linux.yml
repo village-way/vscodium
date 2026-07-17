@@ -190,7 +190,6 @@ jobs:
 
       - name: Get and build zhanlu-vs
         env:
-          ZHANLU_ENGINE: opencode
           ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
