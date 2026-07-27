@@ -3,6 +3,16 @@ name: stable-spearhead
 on:
   workflow_dispatch:
     inputs:
+      # zhanlu_change start - scheduled/manual spearhead releases select the same delivery profile contract
+      source_branch:
+        type: string
+        description: Branch/ref of zhanlu-code to pin
+        default: develop
+      delivery_profile:
+        type: string
+        description: Delivery profile id
+        default: default
+      # zhanlu_change end
       # zhanlu_change start - allow spearhead-triggered releases to pin bundled zhanlu-vs source
       zhanlu_vs_ref:
         type: string
@@ -27,6 +37,8 @@ jobs:
       ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
       VSCODE_QUALITY: stable
       ZHANLU_VS_REF: ${{ github.event.inputs.zhanlu_vs_ref || '' }} # zhanlu_change
+      SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'develop' }} # zhanlu_change
+      ZHANLU_DELIVERY_PROFILE: ${{ github.event.inputs.delivery_profile || 'default' }} # zhanlu_change
 
     steps:
       - uses: actions/checkout@v6
@@ -53,7 +65,7 @@ jobs:
             export RELEASE_VERSION="${RELEASE_VERSION_BASE}${TIME_PATCH}"
           fi
 
-          bash create-release.sh | tee create-release.log
+          bash create-release.sh --source-branch "${SOURCE_BRANCH}" --delivery-profile "${ZHANLU_DELIVERY_PROFILE}" | tee create-release.log
 
           RELEASE_VERSION="$(sed -n 's/^RELEASE_VERSION=//p' create-release.log | tail -n 1)"
           if [[ -z "${RELEASE_VERSION}" ]]; then
@@ -73,6 +85,8 @@ jobs:
           # zhanlu_change end
           bash ./scripts/trigger-stable-release.sh \
             --workflow \
+            --source-branch "${SOURCE_BRANCH}" \
+            --delivery-profile "${ZHANLU_DELIVERY_PROFILE}" \
             --zhanlu-core-ref develop \
             "${zhanlu_vs_args[@]}" \
             --platform all \

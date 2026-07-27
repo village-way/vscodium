@@ -11,7 +11,30 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SOURCE_REPO_URL="${SOURCE_REPO_URL:-https://github.com/village-way/zhanlu-code.git}"
 SOURCE_BRANCH="${SOURCE_BRANCH:-develop}"
+# zhanlu_change - platform fan-out may pin the exact zhanlu-code commit resolved during release preparation
+REQUESTED_SOURCE_COMMIT="${SOURCE_COMMIT:-}"
 SOURCE_DIR="${_SCRIPT_DIR}/.source-repo"
+
+# zhanlu_change start - customer deliveries never follow an unpinned branch from a direct workflow invocation
+if [[ -n "${REQUESTED_SOURCE_COMMIT}" && ! "${REQUESTED_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Error: SOURCE_COMMIT must be an exact 40-character Git SHA" >&2
+    exit 1
+fi
+if [[ "${ZHANLU_DELIVERY_PROFILE:-default}" != "default" ]]; then
+    if [[ -z "${REQUESTED_SOURCE_COMMIT}" ]]; then
+        echo "Error: non-default delivery profiles require a pinned SOURCE_COMMIT" >&2
+        exit 1
+    fi
+    if [[ ! "${ZHANLU_DELIVERY_PROFILE_DIGEST:-}" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "Error: non-default delivery profiles require a SHA-256 ZHANLU_DELIVERY_PROFILE_DIGEST" >&2
+        exit 1
+    fi
+    if [[ -z "${ASSETS_REPOSITORY:-}" ]]; then
+        echo "Error: non-default delivery profiles require an allowlisted ASSETS_REPOSITORY" >&2
+        exit 1
+    fi
+fi
+# zhanlu_change end
 
 # 如果提供了 GitHub token，则将 token 嵌入到 URL 中
 # 这对于访问私有仓库是必需的
@@ -37,6 +60,7 @@ else
     echo "SOURCE_REPO_URL: ${SOURCE_REPO_URL}"
 fi
 echo "SOURCE_BRANCH: ${SOURCE_BRANCH}"
+echo "SOURCE_COMMIT: ${REQUESTED_SOURCE_COMMIT:-<resolve from branch>}" # zhanlu_change
 echo "SOURCE_DIR: ${SOURCE_DIR}"
 
 # git workaround for CI environments
@@ -56,19 +80,26 @@ fi
 if [[ -d "${SOURCE_DIR}/.git" ]]; then
     echo "Source repository already exists, updating..."
     cd "${SOURCE_DIR}"
+    git config core.autocrlf false # zhanlu_change - preserve release-pinned Profile bytes on Windows
     
     # 更新 remote URL（如果提供了 token，需要更新）
     if [[ -n "${ZHANLU_GITHUB_TOKEN}" ]]; then
         git remote set-url origin "${SOURCE_REPO_URL}"
     fi
     
-    # 获取最新代码
-    GIT_TERMINAL_PROMPT=0 git fetch origin "${SOURCE_BRANCH}" || {
+    # zhanlu_change start - prefer the pinned commit; retain branch-only compatibility
+    SOURCE_FETCH_REF="${REQUESTED_SOURCE_COMMIT:-${SOURCE_BRANCH}}"
+    GIT_TERMINAL_PROMPT=0 git fetch origin "${SOURCE_FETCH_REF}" || {
         echo "Error: Failed to fetch from origin. Check your token permissions."
         exit 1
     }
-    git checkout "${SOURCE_BRANCH}" 2>/dev/null || git checkout -b "${SOURCE_BRANCH}" "origin/${SOURCE_BRANCH}"
-    git reset --hard "origin/${SOURCE_BRANCH}"
+    if [[ -n "${REQUESTED_SOURCE_COMMIT}" ]]; then
+        git checkout --detach FETCH_HEAD
+    else
+        git checkout "${SOURCE_BRANCH}" 2>/dev/null || git checkout -b "${SOURCE_BRANCH}" "origin/${SOURCE_BRANCH}"
+        git reset --hard "origin/${SOURCE_BRANCH}"
+    fi
+    # zhanlu_change end
     
     SOURCE_COMMIT=$(git rev-parse HEAD)
     echo "Updated to commit: ${SOURCE_COMMIT}"
@@ -78,19 +109,30 @@ else
     cd "${SOURCE_DIR}"
     
     git init -q
+    git config core.autocrlf false # zhanlu_change - preserve release-pinned Profile bytes on Windows
     git remote add origin "${SOURCE_REPO_URL}"
     
     # 获取指定分支
-    echo "Fetching branch: ${SOURCE_BRANCH}"
-    GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SOURCE_BRANCH}" || {
+    # zhanlu_change start - fetch a release-pinned commit when supplied
+    SOURCE_FETCH_REF="${REQUESTED_SOURCE_COMMIT:-${SOURCE_BRANCH}}"
+    echo "Fetching source ref: ${SOURCE_FETCH_REF}"
+    GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SOURCE_FETCH_REF}" || {
         echo "Error: Failed to clone repository. Check your token permissions."
         exit 1
     }
     git checkout FETCH_HEAD
+    # zhanlu_change end
     
     SOURCE_COMMIT=$(git rev-parse HEAD)
     echo "Cloned at commit: ${SOURCE_COMMIT}"
 fi
+
+# zhanlu_change start - never continue when a remote returned a different commit than the release pin
+if [[ -n "${REQUESTED_SOURCE_COMMIT}" && "${SOURCE_COMMIT}" != "${REQUESTED_SOURCE_COMMIT}" ]]; then
+    echo "Error: fetched source commit ${SOURCE_COMMIT}, expected ${REQUESTED_SOURCE_COMMIT}"
+    exit 1
+fi
+# zhanlu_change end
 
 # 返回到工作目录
 cd "${_SCRIPT_DIR}"
@@ -104,6 +146,7 @@ DIRS_TO_COPY=(
     "build"
     "dev"
     "docs"
+    "delivery-profiles" # zhanlu_change - customer delivery profiles are source-owned build inputs
     "icons"
     "patches"
     "scripts"
@@ -184,21 +227,50 @@ echo ""
 echo "Setting executable permissions..."
 find "${_SCRIPT_DIR}" -type f -name "*.sh" -exec chmod +x {} \;
 
+# zhanlu_change start - validate profile digest and allowlisted release target against the exact fetched commit
+if [[ "${ZHANLU_DELIVERY_PROFILE:-default}" == "default" && -n "${GITHUB_ACTIONS:-}" && "${ASSETS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" != "${GITHUB_REPOSITORY:-}" ]]; then
+    echo "Error: default delivery may publish only to the workflow repository" >&2
+    exit 1
+elif [[ "${ZHANLU_DELIVERY_PROFILE:-default}" != "default" ]]; then
+    EXPECTED_ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-}"
+    # shellcheck disable=SC1091
+    source "${_SCRIPT_DIR}/scripts/prepare_delivery_profile.sh"
+    prepare_delivery_profile "${_SCRIPT_DIR}"
+    if [[ -z "${EXPECTED_ASSETS_REPOSITORY}" || "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" != "${EXPECTED_ASSETS_REPOSITORY}" ]]; then
+        echo "Error: delivery assets repository ${EXPECTED_ASSETS_REPOSITORY:-<missing>} does not match allowlisted profile target ${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" >&2
+        cleanup_delivery_profile
+        exit 1
+    fi
+    cleanup_delivery_profile
+    unset ZHANLU_DELIVERY_PLUGINS_DIR ZHANLU_DELIVERY_STAGING_DIR
+fi
+# zhanlu_change end
+
 # 显示摘要
 echo ""
 echo "=== Source Code Fetch Summary ==="
 echo "SOURCE_COMMIT=\"${SOURCE_COMMIT}\""
 echo "SOURCE_BRANCH=\"${SOURCE_BRANCH}\""
+echo "ZHANLU_DELIVERY_PROFILE=\"${ZHANLU_DELIVERY_PROFILE:-default}\"" # zhanlu_change
+echo "ZHANLU_DELIVERY_PROFILE_DIGEST=\"${ZHANLU_DELIVERY_PROFILE_DIGEST:-}\"" # zhanlu_change
 echo "All source files copied successfully!"
 
 # 导出环境变量（供后续脚本使用）
 export SOURCE_COMMIT
 export SOURCE_BRANCH
+# zhanlu_change start - expose the pinned delivery inputs to every downstream packaging script
+export ZHANLU_DELIVERY_PROFILE="${ZHANLU_DELIVERY_PROFILE:-default}"
+export ZHANLU_DELIVERY_SOURCE_COMMIT="${SOURCE_COMMIT}"
+export ZHANLU_DELIVERY_PROFILE_DIGEST="${ZHANLU_DELIVERY_PROFILE_DIGEST:-}"
+# zhanlu_change end
 
 # for GH actions / CI environments
 if [[ "${GITHUB_ENV}" ]]; then
     echo "SOURCE_COMMIT=${SOURCE_COMMIT}" >> "${GITHUB_ENV}"
     echo "SOURCE_BRANCH=${SOURCE_BRANCH}" >> "${GITHUB_ENV}"
+    echo "ZHANLU_DELIVERY_PROFILE=${ZHANLU_DELIVERY_PROFILE}" >> "${GITHUB_ENV}" # zhanlu_change
+    echo "ZHANLU_DELIVERY_SOURCE_COMMIT=${SOURCE_COMMIT}" >> "${GITHUB_ENV}" # zhanlu_change
+    echo "ZHANLU_DELIVERY_PROFILE_DIGEST=${ZHANLU_DELIVERY_PROFILE_DIGEST}" >> "${GITHUB_ENV}" # zhanlu_change
 fi
 
 echo ""

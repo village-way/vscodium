@@ -36,6 +36,10 @@ GITLAB_FORCE_TAG_UPDATE="${GITLAB_FORCE_TAG_UPDATE:-false}"
 PRINT_VERSION_ONLY=false
 DRY_RUN_VERSION=false
 SYNC_GITLAB=
+# zhanlu_change start - customer delivery profile selection
+SOURCE_BRANCH="${SOURCE_BRANCH:-develop}"
+ZHANLU_DELIVERY_PROFILE="${ZHANLU_DELIVERY_PROFILE:-default}"
+# zhanlu_change end
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -51,6 +55,14 @@ while [[ $# -gt 0 ]]; do
             DRY_RUN_VERSION=true
             shift
             ;;
+        --source-branch)
+            SOURCE_BRANCH="$2"
+            shift 2
+            ;;
+        --delivery-profile)
+            ZHANLU_DELIVERY_PROFILE="$2"
+            shift 2
+            ;;
         --help|-h)
             cat << EOF
 Usage: ./create-release.sh [-g] [--print-version|--dry-run-version]
@@ -59,6 +71,8 @@ Options:
   -g                  同步 GitLab tag 与 Release（默认仅 GitHub）
   --print-version     Print only the resolved release version and exit
   --dry-run-version   Print RELEASE_VERSION=<version> and exit
+  --source-branch     zhanlu-code branch/ref, default develop
+  --delivery-profile  Delivery profile id, default default
 EOF
             exit 0
             ;;
@@ -276,6 +290,25 @@ elif [[ "${DRY_RUN_VERSION}" == "true" ]]; then
     exit 0
 fi
 
+# zhanlu_change start - validate the profile, exact source commit and allowlisted target before touching a release
+source "${SCRIPT_DIR}/scripts/resolve-release-delivery-profile.sh"
+prepare_release_delivery_profile "${SOURCE_BRANCH}" "${ZHANLU_DELIVERY_PROFILE}" "${ASSETS_REPOSITORY}"
+ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
+
+upload_delivery_metadata() {
+    local metadata_dir
+    local metadata
+    metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/zhanlu-delivery-metadata.XXXXXX")"
+    metadata="${metadata_dir}/zhanlu-delivery.json"
+    write_release_delivery_metadata "${metadata}"
+    mkdir -p "${SCRIPT_DIR}/.zhanlu"
+    cp "${metadata}" "${SCRIPT_DIR}/.zhanlu/release-delivery.json"
+    chmod 600 "${SCRIPT_DIR}/.zhanlu/release-delivery.json"
+    gh release upload "${VERSION}" "${metadata}" --repo "${ASSETS_REPOSITORY}" --clobber
+    rm -rf "${metadata_dir}"
+}
+# zhanlu_change end
+
 RELEASE_DATE="${RELEASE_DATE:-$(date +%Y%m%d)}"
 if [[ ! "${RELEASE_DATE}" =~ ^[0-9]{8}$ ]]; then
     echo "错误: RELEASE_DATE 格式不正确，请使用 YYYYMMDD: ${RELEASE_DATE}"
@@ -365,6 +398,7 @@ if [[ ! -f "release_notes.md" ]]; then
     fi
 
     gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}" "${DRAFT_FLAG}" # zhanlu_change - update notes and visibility together
+    upload_delivery_metadata # zhanlu_change
     [[ -n "${SYNC_GITLAB}" ]] && sync_gitlab_releases
     exit 0
 fi
@@ -416,8 +450,20 @@ if [[ "${DRAFT_FLAG}" == "--draft" ]]; then
     printf '\n<a id="assets"></a>\n## Assets\n\nDraft release: download artifacts from the GitHub Assets section below.\n' >> "${RELEASE_NOTES_FILE}"
 fi
 
+# zhanlu_change start - retain human-readable and machine-readable delivery provenance
+DELIVERY_METADATA_JSON="$(jq -cn \
+    --arg profile "${ZHANLU_DELIVERY_PROFILE}" \
+    --arg sourceRef "${SOURCE_BRANCH}" \
+    --arg sourceCommit "${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
+    --arg profileDigest "${ZHANLU_DELIVERY_PROFILE_DIGEST}" \
+    --arg assetsRepository "${ASSETS_REPOSITORY}" \
+    '{deliveryProfile:$profile,sourceRef:$sourceRef,sourceCommit:$sourceCommit,profileDigest:$profileDigest,assetsRepository:$assetsRepository}')"
+printf '\n<!-- zhanlu-delivery %s -->\n' "${DELIVERY_METADATA_JSON}" >> "${RELEASE_NOTES_FILE}"
+# zhanlu_change end
+
 echo "更新 Release notes..."
 gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}" "${DRAFT_FLAG}"
+upload_delivery_metadata # zhanlu_change - platform triggers reuse this exact pin
 # zhanlu_change end
 
 if [[ -n "${SYNC_GITLAB}" ]]; then
