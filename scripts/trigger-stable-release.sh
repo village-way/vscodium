@@ -28,6 +28,16 @@ PLATFORM="all"
 DRY_RUN=false
 # zhanlu-code 分支（与 workflow_dispatch input source_branch / repository_dispatch client_payload 一致）
 SOURCE_BRANCH="develop"
+# zhanlu_change start - delivery profile release pin shared by all platform workflows
+DELIVERY_PROFILE="${ZHANLU_DELIVERY_PROFILE:-default}"
+ZHANLU_DELIVERY_SOURCE_COMMIT="${ZHANLU_DELIVERY_SOURCE_COMMIT:-}"
+ZHANLU_DELIVERY_PROFILE_DIGEST="${ZHANLU_DELIVERY_PROFILE_DIGEST:-}"
+ZHANLU_DELIVERY_ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-}"
+# workflow_dispatch must read the workflow definition from the wrapper ref that
+# contains the delivery-profile implementation. Defaults are resolved after the
+# GitHub repository is known. # zhanlu_change
+WORKFLOW_REF="${WORKFLOW_REF:-}"
+# zhanlu_change end
 # zhanlu-core 分支 / tag / commit（为空时回退到 upstream/stable.json commit）
 ZHANLU_CORE_REF=""
 # zhanlu_change start - allow release operators to pin the bundled zhanlu-vs source
@@ -75,6 +85,7 @@ VSCodium Stable 版本手动触发脚本
   --force         强制更新版本信息
   --platform      指定平台 (macos|linux|windows|all)，默认 all
   --source-branch    zhanlu-code 分支，默认 develop
+  --delivery-profile 定向交付 Profile，默认 default
   --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
   --zhanlu-vs-ref   zhanlu-vs 分支、标签或 commit/ref，默认使用 develop
   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
@@ -151,6 +162,10 @@ while [[ $# -gt 0 ]]; do
             SOURCE_BRANCH="$2"
             shift 2
             ;;
+        --delivery-profile)
+            DELIVERY_PROFILE="$2"
+            shift 2
+            ;;
         --zhanlu-core-ref)
             ZHANLU_CORE_REF="$2"
             shift 2
@@ -208,7 +223,91 @@ get_repo_info() {
         exit 1
     fi
     print_info "目标仓库: $REPO"
+
+    # zhanlu_change start - dispatch the workflow definition from the active wrapper branch
+    if [[ -z "${WORKFLOW_REF}" ]]; then
+        WORKFLOW_REF="$(git branch --show-current 2>/dev/null || true)"
+    fi
+    if [[ -z "${WORKFLOW_REF}" ]]; then
+        WORKFLOW_REF="$(gh repo view "${REPO}" --json defaultBranchRef -q '.defaultBranchRef.name')"
+    fi
+    print_info "工作流定义 Ref: ${WORKFLOW_REF}"
+    # zhanlu_change end
 }
+
+# zhanlu_change start - resolve once, then reuse release metadata instead of following a moving branch
+resolve_delivery_pin() {
+    source "./scripts/resolve-release-delivery-profile.sh"
+    local metadata_dir
+    local metadata=""
+    local local_metadata="./.zhanlu/release-delivery.json"
+    local repository_hint="${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-}"
+    metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/zhanlu-release-metadata.XXXXXX")"
+
+    if [[ -f "${local_metadata}" ]] && \
+        [[ "$(jq -r '.releaseVersion // empty' "${local_metadata}")" == "${RELEASE_VERSION}" ]] && \
+        [[ "$(jq -r '.deliveryProfile // empty' "${local_metadata}")" == "${DELIVERY_PROFILE}" ]] && \
+        [[ "$(jq -r '.sourceRef // empty' "${local_metadata}")" == "${SOURCE_BRANCH}" ]]; then
+        repository_hint="$(jq -r '.assetsRepository' "${local_metadata}")"
+    fi
+    if [[ -z "${repository_hint}" && "${DELIVERY_PROFILE}" == "default" ]]; then
+        repository_hint="${REPO}"
+    fi
+
+    if [[ -n "${repository_hint}" ]] && gh release download "${RELEASE_VERSION}" \
+        --repo "${repository_hint}" \
+        --pattern zhanlu-delivery.json \
+        --dir "${metadata_dir}" >/dev/null 2>&1; then
+        metadata="${metadata_dir}/zhanlu-delivery.json"
+    elif [[ -f "${local_metadata}" && "${repository_hint}" == "$(jq -r '.assetsRepository // empty' "${local_metadata}")" ]]; then
+        metadata="${local_metadata}"
+    fi
+
+    if [[ -n "${metadata}" ]]; then
+        local pinned_version pinned_profile pinned_ref pinned_repository
+        pinned_version="$(jq -r '.releaseVersion // empty' "${metadata}")"
+        pinned_profile="$(jq -r '.deliveryProfile' "${metadata}")"
+        pinned_ref="$(jq -r '.sourceRef' "${metadata}")"
+        pinned_repository="$(jq -r '.assetsRepository' "${metadata}")"
+        if [[ -n "${pinned_version}" && "${pinned_version}" != "${RELEASE_VERSION}" ]] || \
+            [[ "${pinned_profile}" != "${DELIVERY_PROFILE}" || "${pinned_ref}" != "${SOURCE_BRANCH}" || -z "${pinned_repository}" ]]; then
+            print_error "Release ${RELEASE_VERSION} 已固定为 profile=${pinned_profile}, sourceRef=${pinned_ref}, repo=${pinned_repository}"
+            rm -rf "${metadata_dir}"
+            exit 1
+        fi
+        ZHANLU_DELIVERY_SOURCE_COMMIT="$(jq -r '.sourceCommit' "${metadata}")"
+        ZHANLU_DELIVERY_PROFILE_DIGEST="$(jq -r '.profileDigest' "${metadata}")"
+        ZHANLU_DELIVERY_ASSETS_REPOSITORY="${pinned_repository}"
+        prepare_release_delivery_profile "${SOURCE_BRANCH}" "${DELIVERY_PROFILE}" "${REPO}"
+        print_info "复用 Release 中固定的 zhanlu-code commit: ${ZHANLU_DELIVERY_SOURCE_COMMIT}"
+    else
+        resolve_release_delivery_profile "${SOURCE_BRANCH}" "${DELIVERY_PROFILE}" "${REPO}"
+        if gh release download "${RELEASE_VERSION}" \
+            --repo "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" \
+            --pattern zhanlu-delivery.json \
+            --dir "${metadata_dir}" >/dev/null 2>&1; then
+            metadata="${metadata_dir}/zhanlu-delivery.json"
+            if [[ "$(jq -r '.deliveryProfile' "${metadata}")" != "${DELIVERY_PROFILE}" || \
+                "$(jq -r '.sourceRef' "${metadata}")" != "${SOURCE_BRANCH}" || \
+                "$(jq -r '.assetsRepository' "${metadata}")" != "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" ]]; then
+                print_error "Release ${RELEASE_VERSION} 的固定 Profile、source ref 或制品仓库与本次请求不一致"
+                rm -rf "${metadata_dir}"
+                exit 1
+            fi
+            ZHANLU_DELIVERY_SOURCE_COMMIT="$(jq -r '.sourceCommit' "${metadata}")"
+            ZHANLU_DELIVERY_PROFILE_DIGEST="$(jq -r '.profileDigest' "${metadata}")"
+            prepare_release_delivery_profile "${SOURCE_BRANCH}" "${DELIVERY_PROFILE}" "${REPO}"
+        fi
+    fi
+    rm -rf "${metadata_dir}"
+    export ZHANLU_DELIVERY_PROFILE="${DELIVERY_PROFILE}"
+    export ZHANLU_DELIVERY_SOURCE_COMMIT ZHANLU_DELIVERY_PROFILE_DIGEST ZHANLU_DELIVERY_ASSETS_REPOSITORY
+    print_info "定向交付 Profile: ${DELIVERY_PROFILE}"
+    print_info "zhanlu-code 固定提交: ${ZHANLU_DELIVERY_SOURCE_COMMIT}"
+    print_info "Profile 摘要: ${ZHANLU_DELIVERY_PROFILE_DIGEST}"
+    print_info "Release 制品仓库: ${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
+}
+# zhanlu_change end
 
 # 执行或显示命令
 run_cmd() {
@@ -266,17 +365,21 @@ ensure_release_target() {
     fi
 
     local existing_is_draft
-    if existing_is_draft=$(gh release view "${RELEASE_VERSION}" --repo "${REPO}" --json isDraft --jq '.isDraft' 2>/dev/null); then
+    if existing_is_draft=$(gh release view "${RELEASE_VERSION}" --repo "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null); then
         if [[ "${wants_draft}" == true && "${existing_is_draft}" != true ]]; then
             print_error "Release ${RELEASE_VERSION} 已正式发布，拒绝在触发构建时自动改回 draft"
-            print_error "请指定新的 --release-version，或先显式执行 gh release edit ${RELEASE_VERSION} --repo ${REPO} --draft"
+            print_error "请指定新的 --release-version，或先显式执行 gh release edit ${RELEASE_VERSION} --repo ${ZHANLU_DELIVERY_ASSETS_REPOSITORY} --draft"
             exit 1
         fi
     else
         print_info "预创建 Release ${RELEASE_VERSION}（draft=${wants_draft}）..."
     fi
 
-    RELEASE_VERSION="${RELEASE_VERSION}" RELEASE_DRAFT="${release_draft}" ./create-release.sh
+    RELEASE_VERSION="${RELEASE_VERSION}" RELEASE_DRAFT="${release_draft}" \
+        ZHANLU_DELIVERY_PROFILE="${DELIVERY_PROFILE}" SOURCE_BRANCH="${SOURCE_BRANCH}" \
+        ZHANLU_DELIVERY_SOURCE_COMMIT="${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
+        ZHANLU_DELIVERY_PROFILE_DIGEST="${ZHANLU_DELIVERY_PROFILE_DIGEST}" \
+        ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" ./create-release.sh
 }
 # zhanlu_change end
 
@@ -296,7 +399,9 @@ trigger_dispatch() {
 if len(sys.argv) > 2 and sys.argv[2]: payload['client_payload']['zhanlu_core_ref']=sys.argv[2]; \
 if len(sys.argv) > 5 and sys.argv[5]: payload['client_payload']['zhanlu_vs_ref']=sys.argv[5]; \
 if len(sys.argv) > 4 and sys.argv[4]: payload['client_payload']['version_time_patch']=sys.argv[4]; \
+payload['client_payload'].update({'delivery_profile':sys.argv[6],'source_ref':sys.argv[1],'source_commit':sys.argv[7],'profile_digest':sys.argv[8],'assets_repository':sys.argv[9]}); \
 print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" "${RELEASE_VERSION}" "${VERSION_TIME_PATCH}" "${ZHANLU_VS_REF}" \
+            "${DELIVERY_PROFILE}" "${ZHANLU_DELIVERY_SOURCE_COMMIT}" "${ZHANLU_DELIVERY_PROFILE_DIGEST}" "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" \
             | gh api "repos/${REPO}/dispatches" --method POST --input -
     fi
 
@@ -346,6 +451,11 @@ trigger_workflow() {
     fi
 
     wf_fields+=(-f "source_branch=${SOURCE_BRANCH}")
+    wf_fields+=(-f "source_ref=${SOURCE_BRANCH}")
+    wf_fields+=(-f "source_commit=${ZHANLU_DELIVERY_SOURCE_COMMIT}")
+    wf_fields+=(-f "delivery_profile=${DELIVERY_PROFILE}")
+    wf_fields+=(-f "profile_digest=${ZHANLU_DELIVERY_PROFILE_DIGEST}")
+    wf_fields+=(-f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}")
     wf_fields+=(-f "release_version=${RELEASE_VERSION}")
     if [[ -n "${VERSION_TIME_PATCH}" ]]; then
         wf_fields+=(-f "version_time_patch=${VERSION_TIME_PATCH}")
@@ -370,10 +480,10 @@ trigger_workflow() {
     for workflow in "${workflows[@]}"; do
         print_info "触发工作流: $workflow"
         if [[ "$DRY_RUN" == true ]]; then
-            echo -e "${YELLOW}[DRY-RUN]${NC} gh workflow run ${workflow} ${wf_fields[*]}"
+            echo -e "${YELLOW}[DRY-RUN]${NC} gh workflow run ${workflow} --ref ${WORKFLOW_REF} ${wf_fields[*]}"
         else
-            print_info "执行: gh workflow run ${workflow} …"
-            gh workflow run "${workflow}" "${wf_fields[@]}"
+            print_info "执行: gh workflow run ${workflow} --ref ${WORKFLOW_REF} …"
+            gh workflow run "${workflow}" --ref "${WORKFLOW_REF}" "${wf_fields[@]}"
         fi
 
         if [[ "$DRY_RUN" != true ]]; then
@@ -396,6 +506,7 @@ main() {
     check_gh_cli
     get_repo_info
     resolve_release_version
+    resolve_delivery_pin # zhanlu_change - pin profile source before creating/fanning out release jobs
     ensure_release_target # zhanlu_change - pre-create the exact release before dispatch
 
     echo ""
