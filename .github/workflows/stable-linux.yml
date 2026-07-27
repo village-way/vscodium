@@ -16,6 +16,24 @@ on:
         type: string
         description: Branch of zhanlu-code to fetch
         default: develop
+      # zhanlu_change start - pin and propagate one delivery profile across every platform job
+      source_ref:
+        type: string
+        description: Original zhanlu-code ref recorded in delivery metadata
+      source_commit:
+        type: string
+        description: Exact zhanlu-code commit resolved during release preparation
+      delivery_profile:
+        type: string
+        description: Delivery profile id
+        default: default
+      profile_digest:
+        type: string
+        description: SHA-256 digest of the resolved delivery profile
+      assets_repository:
+        type: string
+        description: Allowlisted release assets repository
+      # zhanlu_change end
       zhanlu_core_ref:
         type: string
         description: Branch or commit of zhanlu-core to fetch (optional)
@@ -35,18 +53,22 @@ on:
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }} # zhanlu_change - wrapper checkout follows the triggering ref
   APP_NAME: Zhanlu
   APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
-  ASSETS_REPOSITORY: ${{ github.repository }}
+  ASSETS_REPOSITORY: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }} # zhanlu_change
   BINARY_NAME: zhanlu
   DISABLE_UPDATE: 'yes'
-  GH_REPO_PATH: ${{ github.repository }}
+  GH_REPO_PATH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }} # zhanlu_change
   ZHANLU_PUBLIC_URL: https://ecloud.10086.cn/api/query/zhanlu-cloud # zhanlu_change - public product homepage for Linux metadata
   ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
   OS_NAME: linux
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
-  ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_branch || github.event.client_payload.source_branch || 'develop' }}
+  ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.source_ref || github.event.inputs.source_branch) || github.event.client_payload.source_ref || github.event.client_payload.source_branch || 'develop' }} # zhanlu_change
+  SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_commit || github.event.client_payload.source_commit || '' }} # zhanlu_change
+  ZHANLU_DELIVERY_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.delivery_profile || github.event.client_payload.delivery_profile || 'default' }} # zhanlu_change
+  ZHANLU_DELIVERY_PROFILE_DIGEST: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.profile_digest || github.event.client_payload.profile_digest || '' }} # zhanlu_change
   ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }}
   ZHANLU_VS_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_vs_ref || github.event.client_payload.zhanlu_vs_ref || '' }} # zhanlu_change
   RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version || github.event.client_payload.release_version || '' }}
@@ -96,7 +118,7 @@ jobs:
 
       - name: Check existing VSCodium tags/releases
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }} # zhanlu_change - customer asset repositories require cross-repo access
           CHECK_ALL: 'yes'
         run: ./check_tags.sh
 
@@ -330,7 +352,7 @@ jobs:
         env:
           CHECK_REH: 'no'
           DISABLE_APPIMAGE: ${{ vars.DISABLE_STABLE_APPIMAGE }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }} # zhanlu_change - customer asset repositories require cross-repo access
         run: ./check_tags.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
@@ -367,7 +389,7 @@ jobs:
 
       - name: Build
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }} # zhanlu_change - customer asset repositories require cross-repo access
           npm_config_arch: ${{ matrix.npm_arch }}
         run: ./build/linux/package_bin.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
@@ -563,7 +585,7 @@ jobs:
 
       - name: Check existing VSCodium tags/releases
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }} # zhanlu_change - customer asset repositories require cross-repo access
           CHECK_ONLY_REH: 'yes'
         run: ./check_tags.sh
         if: env.DISABLED != 'yes'
@@ -599,7 +621,7 @@ jobs:
 
       - name: Build
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }} # zhanlu_change - customer asset repositories require cross-repo access
           npm_config_arch: ${{ matrix.npm_arch }}
         run: ./build/linux/package_reh.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -682,7 +704,7 @@ jobs:
 
       - name: Check existing VSCodium tags/releases
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }} # zhanlu_change - customer asset repositories require cross-repo access
           CHECK_ONLY_REH: 'yes'
         run: ./check_tags.sh
 
