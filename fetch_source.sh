@@ -80,6 +80,7 @@ fi
 if [[ -d "${SOURCE_DIR}/.git" ]]; then
     echo "Source repository already exists, updating..."
     cd "${SOURCE_DIR}"
+    git config core.autocrlf false # zhanlu_change - preserve release-pinned Profile bytes on Windows
     
     # 更新 remote URL（如果提供了 token，需要更新）
     if [[ -n "${ZHANLU_GITHUB_TOKEN}" ]]; then
@@ -108,6 +109,7 @@ else
     cd "${SOURCE_DIR}"
     
     git init -q
+    git config core.autocrlf false # zhanlu_change - preserve release-pinned Profile bytes on Windows
     git remote add origin "${SOURCE_REPO_URL}"
     
     # 获取指定分支
