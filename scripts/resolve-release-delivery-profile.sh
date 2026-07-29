@@ -19,15 +19,8 @@ resolve_release_delivery_profile() {
         return 1
     fi
 
-    if [[ "${profile_id}" == "default" ]]; then
-        ZHANLU_DELIVERY_PROFILE="default"
-        ZHANLU_DELIVERY_PROFILE_DIGEST="$(node -e 'process.stdout.write(require("node:crypto").createHash("sha256").update("default").digest("hex"))')"
-        ZHANLU_DELIVERY_ASSETS_REPOSITORY="${current_assets_repository}"
-        export ZHANLU_DELIVERY_PROFILE ZHANLU_DELIVERY_SOURCE_COMMIT
-        export ZHANLU_DELIVERY_PROFILE_DIGEST ZHANLU_DELIVERY_ASSETS_REPOSITORY
-        return
-    fi
-
+    # The default profile ships staged plugins too, so its digest has to be resolved from the pinned
+    # source instead of a constant.
     temp_root="$(mktemp -d "${TMPDIR:-/tmp}/zhanlu-release-profile.XXXXXX")"
     archive="${temp_root}/source.tar.gz"
     source_root="${temp_root}/source"
@@ -44,7 +37,11 @@ resolve_release_delivery_profile() {
     fi
     ZHANLU_DELIVERY_PROFILE="$(jq -r '.id' <<<"${result}")"
     ZHANLU_DELIVERY_PROFILE_DIGEST="$(jq -r '.profileDigest' <<<"${result}")"
-    ZHANLU_DELIVERY_ASSETS_REPOSITORY="$(jq -r '.assetsRepository' <<<"${result}")"
+    if [[ "${profile_id}" == "default" ]]; then
+        ZHANLU_DELIVERY_ASSETS_REPOSITORY="${current_assets_repository}"
+    else
+        ZHANLU_DELIVERY_ASSETS_REPOSITORY="$(jq -r '.assetsRepository' <<<"${result}")"
+    fi
     rm -rf "${temp_root}"
     export ZHANLU_DELIVERY_PROFILE ZHANLU_DELIVERY_SOURCE_COMMIT
     export ZHANLU_DELIVERY_PROFILE_DIGEST ZHANLU_DELIVERY_ASSETS_REPOSITORY
