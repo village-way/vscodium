@@ -312,15 +312,22 @@ APP_NAME_LC="$( echo "${APP_NAME}" | awk '{print tolower($0)}' )"
 VERSION_CLEAN="${VERSION%-insider}"
 
 # 确保 tag 存在（如果不存在则创建）
+# zhanlu_change start - unique empty commit per new tag so GitHub Release created_at advances
 if ! git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
     echo "远程仓库不存在 tag: ${VERSION}，正在创建..."
-    # 如果本地也没有这个 tag，先创建本地 tag
-    if ! git rev-parse "${VERSION}" &>/dev/null; then
+    if git rev-parse "${VERSION}" &>/dev/null; then
+        echo "本地已存在 tag: ${VERSION}，将直接推送到远程"
+    else
+        # GitHub sets release created_at from the tagged commit date, not draft/upload time.
+        echo "创建 empty commit，使 Release created_at 对应该发版时刻..."
+        git commit --allow-empty -m "release: ${VERSION}"
+        git push origin HEAD
         git tag "${VERSION}"
     fi
     git push origin "${VERSION}"
     echo "Tag ${VERSION} 已推送到远程仓库"
 fi
+# zhanlu_change end
 
 # 如果是 stable 版本，先使用 --generate-notes 生成自动的 release notes
 if [[ "${VSCODE_QUALITY}" == "stable" ]] && [[ "${UPDATE_EXISTING}" == "false" ]]; then
