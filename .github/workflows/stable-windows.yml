@@ -45,6 +45,11 @@ on:
       zhanlu_vs_ref:
         type: string
         description: Branch, tag, commit, or ref of zhanlu-vs to fetch (optional)
+      bundle_codex_runtime:
+        type: choice
+        description: Bundle the optional Codex CLI runtime
+        default: '0'
+        options: ['0', '1']
       # zhanlu_change end
       release_version:
         type: string
@@ -73,6 +78,7 @@ env:
   ZHANLU_DELIVERY_PROFILE_DIGEST: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.profile_digest || github.event.client_payload.profile_digest || '' }} # zhanlu_change
   ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }}
   ZHANLU_VS_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_vs_ref || github.event.client_payload.zhanlu_vs_ref || '' }} # zhanlu_change
+  ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bundle_codex_runtime || github.event.client_payload.bundle_codex_runtime || '0' }} # zhanlu_change
   RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version || github.event.client_payload.release_version || '' }}
   VERSION_TIME_PATCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_time_patch || github.event.client_payload.version_time_patch || '' }}
   RELEASE_VERSION_EXPLICIT: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.release_version) || (github.event_name == 'repository_dispatch' && github.event.client_payload.release_version)) && 'yes' || 'no' }}

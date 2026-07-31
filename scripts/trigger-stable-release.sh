@@ -14,6 +14,7 @@
 #   --platform      指定平台 (macos|linux|windows|all)，默认 all
 #   --source-branch    zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
 #   --zhanlu-core-ref zhanlu-core 仓库分支或 commit，默认使用 upstream/stable.json 中的 commit
+#   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
 #   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
 #   --dry-run       仅显示将要执行的命令，不实际执行
 #   --help          显示帮助信息
@@ -42,6 +43,7 @@ WORKFLOW_REF="${WORKFLOW_REF:-}"
 ZHANLU_CORE_REF=""
 # zhanlu_change start - allow release operators to pin the bundled zhanlu-vs source
 ZHANLU_VS_REF=""
+ZHANLU_BUNDLE_CODEX_RUNTIME="${ZHANLU_BUNDLE_CODEX_RUNTIME:-0}"
 # zhanlu_change end
 # Release 版本：为空时触发前只解析一次，随后传给所有 workflow
 RELEASE_VERSION="${RELEASE_VERSION:-}"
@@ -88,6 +90,7 @@ VSCodium Stable 版本手动触发脚本
   --delivery-profile 定向交付 Profile，默认 default
   --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
   --zhanlu-vs-ref   zhanlu-vs 分支、标签或 commit/ref，默认使用 develop
+  --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
   --version-time-patch 指定内部 VS Code 兼容版本的 4 位补丁号（可用 VERSION_TIME_PATCH 环境变量）
   --dry-run       仅显示将要执行的命令，不实际执行
@@ -175,6 +178,10 @@ while [[ $# -gt 0 ]]; do
             ZHANLU_VS_REF="$2"
             shift 2
             ;;
+        --bundle-codex-runtime)
+            ZHANLU_BUNDLE_CODEX_RUNTIME="$2"
+            shift 2
+            ;;
         # zhanlu_change end
         --release-version)
             RELEASE_VERSION="$2"
@@ -199,6 +206,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "${ZHANLU_BUNDLE_CODEX_RUNTIME}" != "0" && "${ZHANLU_BUNDLE_CODEX_RUNTIME}" != "1" ]]; then
+    print_error "--bundle-codex-runtime 必须是 0 或 1"
+    exit 1
+fi
 
 # 检查 gh CLI
 check_gh_cli() {
@@ -399,9 +411,9 @@ trigger_dispatch() {
 if len(sys.argv) > 2 and sys.argv[2]: payload['client_payload']['zhanlu_core_ref']=sys.argv[2]; \
 if len(sys.argv) > 5 and sys.argv[5]: payload['client_payload']['zhanlu_vs_ref']=sys.argv[5]; \
 if len(sys.argv) > 4 and sys.argv[4]: payload['client_payload']['version_time_patch']=sys.argv[4]; \
-payload['client_payload'].update({'delivery_profile':sys.argv[6],'source_ref':sys.argv[1],'source_commit':sys.argv[7],'profile_digest':sys.argv[8],'assets_repository':sys.argv[9]}); \
+payload['client_payload'].update({'delivery_profile':sys.argv[6],'source_ref':sys.argv[1],'source_commit':sys.argv[7],'profile_digest':sys.argv[8],'assets_repository':sys.argv[9],'bundle_codex_runtime':sys.argv[10]}); \
 print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" "${RELEASE_VERSION}" "${VERSION_TIME_PATCH}" "${ZHANLU_VS_REF}" \
-            "${DELIVERY_PROFILE}" "${ZHANLU_DELIVERY_SOURCE_COMMIT}" "${ZHANLU_DELIVERY_PROFILE_DIGEST}" "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" \
+            "${DELIVERY_PROFILE}" "${ZHANLU_DELIVERY_SOURCE_COMMIT}" "${ZHANLU_DELIVERY_PROFILE_DIGEST}" "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" "${ZHANLU_BUNDLE_CODEX_RUNTIME}" \
             | gh api "repos/${REPO}/dispatches" --method POST --input -
     fi
 
@@ -457,6 +469,8 @@ trigger_workflow() {
     wf_fields+=(-f "profile_digest=${ZHANLU_DELIVERY_PROFILE_DIGEST}")
     wf_fields+=(-f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}")
     wf_fields+=(-f "release_version=${RELEASE_VERSION}")
+    wf_fields+=(-f "bundle_codex_runtime=${ZHANLU_BUNDLE_CODEX_RUNTIME}")
+    print_info "Codex runtime bundle: ${ZHANLU_BUNDLE_CODEX_RUNTIME}"
     if [[ -n "${VERSION_TIME_PATCH}" ]]; then
         wf_fields+=(-f "version_time_patch=${VERSION_TIME_PATCH}")
         print_info "内部版本补丁号: ${VERSION_TIME_PATCH}"
