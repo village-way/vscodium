@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zhanlu Build"
+  short_description: "Sync Zhanlu sources and run all-platform releases"
+  default_prompt: "Use $zhanlu-build to sync GitLab sources, prepare a Zhanlu release, and run the requested platform builds."

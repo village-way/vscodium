@@ -1,0 +1,912 @@
+#!/usr/bin/env python3
+"""Safely prepare and trigger Zhanlu IDE release builds."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from typing import Callable, Iterable, Mapping, Sequence, TextIO
+
+
+COMPONENT_REPOS = (
+    "zhanlu-cloud",
+    "zhanlu-code",
+    "zhanlu-core",
+    "zhanlu-loc",
+    "zhanlu-vs",
+)
+WORKFLOWS = {
+    "macos": "stable-macos.yml",
+    "linux": "stable-linux.yml",
+    "windows": "stable-windows.yml",
+}
+VERSION_RE = re.compile(r"^(?:v)?([0-9]+)\.([0-9]+)\.([0-9]+)$")
+TIME_PATCH_RE = re.compile(r"^[0-9]{1,4}$")
+TERMINAL_STATUS = "completed"
+
+
+class BuildError(RuntimeError):
+    """Raised for an expected, user-actionable build error."""
+
+
+@dataclass(frozen=True)
+class Config:
+    workspace: Path
+    kind: str
+    version: str
+    time_patch: str | None
+    source_branch: str
+    delivery_profile: str
+    zhanlu_core_ref: str
+    zhanlu_vs_ref: str
+    bundle_codex_runtime: str
+    platform: str
+    apply: bool
+    trigger_only: bool
+    no_gitlab: bool
+    publish: bool
+    no_wait: bool
+    poll_interval: float
+    discovery_timeout: float
+
+
+@dataclass(frozen=True)
+class ReleasePlan:
+    config: Config
+    release_repo: Path
+    release_version: str
+    version_time_patch: str
+    release_date: str
+    gitlab_sync: bool
+    workflows: tuple[str, ...]
+
+    @property
+    def release_draft(self) -> bool:
+        return not self.config.publish
+
+    @property
+    def source_sync_all_refs(self) -> bool:
+        return any(
+            ref != "develop"
+            for ref in (
+                self.config.source_branch,
+                self.config.zhanlu_core_ref,
+                self.config.zhanlu_vs_ref,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+
+
+class CommandRunner:
+    """Run commands without a shell so refs and tokens cannot be re-evaluated."""
+
+    def run(
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        capture: bool = True,
+    ) -> CommandResult:
+        completed = subprocess.run(
+            list(args),
+            cwd=str(cwd) if cwd else None,
+            env=dict(env) if env is not None else None,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+        return CommandResult(
+            stdout=completed.stdout or "",
+            stderr=completed.stderr or "",
+            returncode=completed.returncode,
+        )
+
+
+def default_workspace() -> Path:
+    # The skill is stored in the standalone vscodium project, while releases
+    # intentionally run from the current Zhanlu multi-repository workspace.
+    configured = os.environ.get("ZHANLU_WORKSPACE_ROOT", "/Volumes/Files/zhanlu-ide")
+    return Path(configured).expanduser().resolve()
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        description="Prepare and trigger a Zhanlu development or formal release."
+    )
+    result.add_argument("--kind", choices=("development", "formal"), required=True)
+    result.add_argument("--version", required=True, help="Base/exact Zhanlu version")
+    result.add_argument("--time-patch", help="Explicit internal patch, 1-4 digits")
+    result.add_argument("--workspace", type=Path, default=default_workspace())
+    result.add_argument("--source-branch", default="develop")
+    result.add_argument("--delivery-profile", default="default")
+    result.add_argument("--zhanlu-core-ref", default="develop")
+    result.add_argument("--zhanlu-vs-ref", default="develop")
+    result.add_argument(
+        "--bundle-codex-runtime", choices=("0", "1"), default="0",
+        help="Bundle the optional Codex CLI runtime (default: 0)",
+    )
+    result.add_argument(
+        "--platform", choices=("all", "macos", "linux", "windows"), default="all"
+    )
+    result.add_argument("--trigger-only", action="store_true")
+    result.add_argument("--no-gitlab", action="store_true")
+    result.add_argument("--publish", action="store_true")
+    result.add_argument("--no-wait", action="store_true")
+    result.add_argument("--apply", action="store_true")
+    result.add_argument("--poll-interval", type=float, default=30.0)
+    result.add_argument("--run-discovery-timeout", type=float, default=300.0)
+    return result
+
+
+def parse_config(argv: Sequence[str] | None = None) -> Config:
+    args = parser().parse_args(argv)
+    if args.poll_interval <= 0:
+        raise BuildError("--poll-interval must be greater than zero")
+    if args.run_discovery_timeout < 0:
+        raise BuildError("--run-discovery-timeout cannot be negative")
+    return Config(
+        workspace=args.workspace.resolve(),
+        kind=args.kind,
+        version=args.version,
+        time_patch=args.time_patch,
+        source_branch=args.source_branch,
+        delivery_profile=args.delivery_profile,
+        zhanlu_core_ref=args.zhanlu_core_ref,
+        zhanlu_vs_ref=args.zhanlu_vs_ref,
+        bundle_codex_runtime=args.bundle_codex_runtime,
+        platform=args.platform,
+        apply=args.apply,
+        trigger_only=args.trigger_only,
+        no_gitlab=args.no_gitlab,
+        publish=args.publish,
+        no_wait=args.no_wait,
+        poll_interval=args.poll_interval,
+        discovery_timeout=args.run_discovery_timeout,
+    )
+
+
+def normalize_time_patch(value: str) -> str:
+    if not TIME_PATCH_RE.fullmatch(value):
+        raise BuildError(f"invalid time patch: {value!r}; expected 1-4 digits")
+    return f"{int(value):04d}"
+
+
+def generated_time_patch(now: dt.datetime) -> str:
+    return f"{now.timetuple().tm_yday * 24 + now.hour:04d}"
+
+
+def resolve_version(
+    kind: str,
+    requested: str,
+    explicit_patch: str | None,
+    now: dt.datetime,
+) -> tuple[str, str]:
+    match = VERSION_RE.fullmatch(requested)
+    if not match:
+        raise BuildError(
+            f"invalid version: {requested!r}; expected X.Y.Z, optionally prefixed by v"
+        )
+
+    major, minor, public_patch = match.groups()
+    normalized = f"{major}.{minor}.{public_patch}"
+    supplied_patch = normalize_time_patch(explicit_patch) if explicit_patch else None
+
+    if kind == "formal":
+        return normalized, supplied_patch or generated_time_patch(now)
+
+    if len(public_patch) > 4:
+        inferred_patch = public_patch[-4:]
+        if supplied_patch and supplied_patch != inferred_patch:
+            raise BuildError(
+                "explicit time patch does not match the exact development version "
+                f"suffix: {supplied_patch} != {inferred_patch}"
+            )
+        return normalized, inferred_patch
+
+    time_patch = supplied_patch or generated_time_patch(now)
+    return f"{normalized}{time_patch}", time_patch
+
+
+def selected_workflows(platform: str) -> tuple[str, ...]:
+    if platform == "all":
+        return tuple(WORKFLOWS.values())
+    return (WORKFLOWS[platform],)
+
+
+def make_plan(config: Config, now: dt.datetime | None = None) -> ReleasePlan:
+    current = now or dt.datetime.now().astimezone()
+    release_version, version_time_patch = resolve_version(
+        config.kind, config.version, config.time_patch, current
+    )
+    return ReleasePlan(
+        config=config,
+        release_repo=config.workspace / "vscodium",
+        release_version=release_version,
+        version_time_patch=version_time_patch,
+        release_date=current.strftime("%Y%m%d"),
+        gitlab_sync=(
+            config.kind == "formal" and not config.no_gitlab and not config.trigger_only
+        ),
+        workflows=selected_workflows(config.platform),
+    )
+
+
+def validate_native_scripts(plan: ReleasePlan) -> None:
+    expected_repo = (plan.config.workspace / "vscodium").resolve()
+    if plan.release_repo.resolve() != expected_repo:
+        raise BuildError(f"release checkout must be {expected_repo}")
+
+    create_script = plan.release_repo / "create-release.sh"
+    trigger_script = plan.release_repo / "scripts" / "trigger-stable-release.sh"
+    sync_script = plan.release_repo / "scripts" / "sync-zhanlu-gitlab-to-github.sh"
+    sync_config = plan.release_repo / "scripts" / "sync-zhanlu-gitlab-to-github.repos"
+    if (
+        not create_script.is_file()
+        or not trigger_script.is_file()
+        or not sync_script.is_file()
+        or not sync_config.is_file()
+    ):
+        raise BuildError(
+            f"missing native release scripts under canonical checkout: {plan.release_repo}"
+        )
+
+    create_text = create_script.read_text(encoding="utf-8")
+    trigger_text = trigger_script.read_text(encoding="utf-8")
+    sync_text = sync_script.read_text(encoding="utf-8")
+    for token in ("-g)", "--delivery-profile)"):
+        if token not in create_text:
+            raise BuildError(f"create-release.sh lacks required capability: {token}")
+    for token in (
+        "--delivery-profile)",
+        "--zhanlu-vs-ref)",
+        "--bundle-codex-runtime)",
+        "--version-time-patch)",
+    ):
+        if token not in trigger_text:
+            raise BuildError(
+                f"trigger-stable-release.sh lacks required capability: {token}"
+            )
+    for token in ("--dry-run", "--all-refs"):
+        if token not in sync_text:
+            raise BuildError(
+                f"sync-zhanlu-gitlab-to-github.sh lacks required capability: {token}"
+            )
+
+
+def source_sync_command(plan: ReleasePlan, *, dry_run: bool) -> list[str]:
+    command = ["bash", "./scripts/sync-zhanlu-gitlab-to-github.sh"]
+    if dry_run:
+        command.append("--dry-run")
+    if plan.source_sync_all_refs:
+        command.append("--all-refs")
+    return command
+
+
+def create_command(plan: ReleasePlan) -> list[str]:
+    command = ["bash", "create-release.sh"]
+    if plan.gitlab_sync:
+        command.append("-g")
+    command.extend(
+        [
+            "--source-branch",
+            plan.config.source_branch,
+            "--delivery-profile",
+            plan.config.delivery_profile,
+        ]
+    )
+    return command
+
+
+def trigger_command(plan: ReleasePlan) -> list[str]:
+    return [
+        "bash",
+        "./scripts/trigger-stable-release.sh",
+        "--workflow",
+        "--source-branch",
+        plan.config.source_branch,
+        "--delivery-profile",
+        plan.config.delivery_profile,
+        "--zhanlu-core-ref",
+        plan.config.zhanlu_core_ref,
+        "--zhanlu-vs-ref",
+        plan.config.zhanlu_vs_ref,
+        "--bundle-codex-runtime",
+        plan.config.bundle_codex_runtime,
+        "--platform",
+        plan.config.platform,
+        "--release-version",
+        plan.release_version,
+        "--version-time-patch",
+        plan.version_time_patch,
+    ]
+
+
+def safe_environment(plan: ReleasePlan) -> dict[str, str]:
+    result = dict(os.environ)
+    result.update(
+        {
+            "RELEASE_VERSION": plan.release_version,
+            "VERSION_TIME_PATCH": plan.version_time_patch,
+            "RELEASE_DRAFT": "false" if plan.config.publish else "true",
+            "SOURCE_BRANCH": plan.config.source_branch,
+            "ZHANLU_DELIVERY_PROFILE": plan.config.delivery_profile,
+            "ZHANLU_IDE_ROOT": str(plan.config.workspace),
+            "RELEASE_DATE": plan.release_date,
+            "GITLAB_FORCE_TAG_UPDATE": "false",
+            "ZHANLU_BUNDLE_CODEX_RUNTIME": plan.config.bundle_codex_runtime,
+        }
+    )
+    return result
+
+
+def read_env_value(env_file: Path, key: str) -> str | None:
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=\s*(.*?)\s*$")
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        match = pattern.match(raw_line)
+        if not match:
+            continue
+        value = match.group(1)
+        if " #" in value:
+            value = value.split(" #", 1)[0].rstrip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        return value or None
+    return None
+
+
+def load_gitlab_environment(workspace: Path, environment: dict[str, str]) -> None:
+    if environment.get("GITLAB_TOKEN") or environment.get("GITLAB_ACCESS_TOKEN"):
+        return
+    env_file = workspace / ".env"
+    if not env_file.is_file():
+        return
+    for key in (
+        "GITLAB_TOKEN",
+        "GITLAB_ACCESS_TOKEN",
+        "OAUTH_TOKEN",
+        "GLAB_TOKEN",
+        "ZHANLU_GITLAB_TOKEN",
+        "ZHANLU_GITHUB_TOKEN",
+    ):
+        value = read_env_value(env_file, key)
+        if value:
+            environment["GITLAB_TOKEN"] = value
+            break
+    if not environment.get("GITLAB_HOST"):
+        host = read_env_value(env_file, "GITLAB_HOST") or read_env_value(
+            env_file, "CI_SERVER_HOST"
+        )
+        if host:
+            environment["GITLAB_HOST"] = host
+
+
+def command_text(args: Iterable[str]) -> str:
+    return shlex.join(list(args))
+
+
+def local_repo_snapshot(
+    runner: CommandRunner, repo: Path, expected_branch: str
+) -> tuple[str, str, str]:
+    if not repo.exists():
+        return "missing", "-", "-"
+    try:
+        branch = runner.run(
+            ["git", "-C", str(repo), "branch", "--show-current"]
+        ).stdout.strip()
+        sha = runner.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"]
+        ).stdout.strip()
+        dirty = runner.run(
+            ["git", "-C", str(repo), "status", "--porcelain"]
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        return "invalid", "-", "-"
+    state = "clean" if not dirty else "dirty"
+    if branch != expected_branch:
+        state = f"{state}, expected {expected_branch}"
+    return state, branch or "detached", sha or "-"
+
+
+def print_plan(
+    plan: ReleasePlan, runner: CommandRunner, output: TextIO = sys.stdout
+) -> None:
+    mode = "APPLY" if plan.config.apply else "DRY RUN"
+    print("Zhanlu build plan", file=output)
+    print(f"  mode: {mode}", file=output)
+    print(f"  workspace: {plan.config.workspace}", file=output)
+    print(f"  release checkout: {plan.release_repo}", file=output)
+    print(f"  kind: {plan.config.kind}", file=output)
+    print(f"  release version: {plan.release_version}", file=output)
+    print(f"  internal time patch: {plan.version_time_patch}", file=output)
+    print(f"  source branch: {plan.config.source_branch}", file=output)
+    print(f"  zhanlu-core ref: {plan.config.zhanlu_core_ref}", file=output)
+    print(f"  zhanlu-vs ref: {plan.config.zhanlu_vs_ref}", file=output)
+    print(f"  bundle Codex runtime: {plan.config.bundle_codex_runtime}", file=output)
+    print(f"  delivery profile: {plan.config.delivery_profile}", file=output)
+    print(f"  platform: {plan.config.platform}", file=output)
+    print(
+        "  GitLab -> GitHub source sync: "
+        + ("all branches and tags" if plan.source_sync_all_refs else "default branches"),
+        file=output,
+    )
+    print(f"  GitHub visibility: {'draft' if plan.release_draft else 'published'}", file=output)
+    print(f"  create/update release: {'no' if plan.config.trigger_only else 'yes'}", file=output)
+    print(f"  component GitLab sync: {'yes' if plan.gitlab_sync else 'no'}", file=output)
+    if plan.gitlab_sync:
+        print(
+            "  component GitLab tag: "
+            f"release_zhanlu-ide_v{plan.release_version}_{plan.release_date}",
+            file=output,
+        )
+    print(f"  wait for workflows: {'no' if plan.config.no_wait else 'yes'}", file=output)
+
+    state, branch, sha = local_repo_snapshot(runner, plan.release_repo, "master")
+    print("Local repository snapshot (no fetch):", file=output)
+    print(f"  vscodium: state={state} branch={branch} sha={sha}", file=output)
+    if plan.gitlab_sync:
+        for name in COMPONENT_REPOS:
+            state, branch, sha = local_repo_snapshot(
+                runner, plan.config.workspace / name, "develop"
+            )
+            print(f"  {name}: state={state} branch={branch} sha={sha}", file=output)
+
+    print("Native commands:", file=output)
+    print("  " + command_text(source_sync_command(plan, dry_run=True)), file=output)
+    print("  " + command_text(source_sync_command(plan, dry_run=False)), file=output)
+    if not plan.config.trigger_only:
+        print(
+            "  "
+            + f"RELEASE_VERSION={shlex.quote(plan.release_version)} "
+            + f"VERSION_TIME_PATCH={shlex.quote(plan.version_time_patch)} "
+            + f"RELEASE_DRAFT={'true' if plan.release_draft else 'false'} "
+            + command_text(create_command(plan)),
+            file=output,
+        )
+    print("  " + command_text(trigger_command(plan)), file=output)
+    if not plan.config.apply:
+        print("Dry run only: no remote command was executed. Add --apply only after confirmation.", file=output)
+
+
+def require_tool(name: str) -> None:
+    if shutil.which(name) is None:
+        raise BuildError(f"required command not found in PATH: {name}")
+
+
+def require_synced_repo(
+    runner: CommandRunner,
+    repo: Path,
+    expected_branch: str,
+) -> str:
+    if not repo.exists():
+        raise BuildError(f"repository does not exist: {repo}")
+    dirty = runner.run(
+        ["git", "-C", str(repo), "status", "--porcelain"]
+    ).stdout.strip()
+    if dirty:
+        raise BuildError(f"repository must be clean before release: {repo}")
+    branch = runner.run(
+        ["git", "-C", str(repo), "branch", "--show-current"]
+    ).stdout.strip()
+    if branch != expected_branch:
+        raise BuildError(
+            f"repository {repo} must be on {expected_branch}, found {branch or 'detached'}"
+        )
+    runner.run(
+        ["git", "-C", str(repo), "fetch", "--quiet", "origin", expected_branch]
+    )
+    head = runner.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"]
+    ).stdout.strip()
+    remote = runner.run(
+        ["git", "-C", str(repo), "rev-parse", f"origin/{expected_branch}"]
+    ).stdout.strip()
+    if head != remote:
+        raise BuildError(
+            f"repository {repo} is not synchronized with origin/{expected_branch}: "
+            f"HEAD={head}, remote={remote}"
+        )
+    return head
+
+
+def preflight_apply(
+    plan: ReleasePlan,
+    runner: CommandRunner,
+    environment: dict[str, str],
+    output: TextIO,
+) -> tuple[str, str]:
+    for tool in ("git", "gh", "bash"):
+        require_tool(tool)
+    if plan.gitlab_sync:
+        require_tool("glab")
+
+    release_sha = require_synced_repo(runner, plan.release_repo, "master")
+    print(f"Preflight vscodium: {release_sha}", file=output)
+
+    if plan.gitlab_sync:
+        load_gitlab_environment(plan.config.workspace, environment)
+        if not (
+            environment.get("GITLAB_TOKEN")
+            or environment.get("GITLAB_ACCESS_TOKEN")
+        ):
+            raise BuildError(
+                "formal GitLab sync requires GITLAB_TOKEN or GITLAB_ACCESS_TOKEN "
+                "in the process or workspace .env"
+            )
+        for name in COMPONENT_REPOS:
+            sha = require_synced_repo(
+                runner, plan.config.workspace / name, "develop"
+            )
+            print(f"Preflight {name}: {sha}", file=output)
+
+    runner.run(["gh", "auth", "status"], cwd=plan.release_repo, env=environment)
+    repo_slug = runner.run(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        cwd=plan.release_repo,
+        env=environment,
+    ).stdout.strip()
+    if not repo_slug:
+        raise BuildError("could not resolve the GitHub repository")
+    if plan.gitlab_sync:
+        runner.run(["glab", "auth", "status"], cwd=plan.release_repo, env=environment)
+    return release_sha, repo_slug
+
+
+def synchronize_sources(
+    plan: ReleasePlan,
+    runner: CommandRunner,
+    environment: Mapping[str, str],
+    output: TextIO,
+) -> None:
+    for tool in ("git", "bash"):
+        require_tool(tool)
+    print("Previewing GitLab -> GitHub source synchronization...", file=output)
+    runner.run(
+        source_sync_command(plan, dry_run=True),
+        cwd=plan.release_repo,
+        env=environment,
+        capture=False,
+    )
+    print("Synchronizing GitLab sources to GitHub...", file=output)
+    runner.run(
+        source_sync_command(plan, dry_run=False),
+        cwd=plan.release_repo,
+        env=environment,
+        capture=False,
+    )
+    scope = "all refs" if plan.source_sync_all_refs else "default branches"
+    print(f"GitLab -> GitHub source synchronization completed ({scope}).", file=output)
+
+
+def parse_json_list(raw: str, context: str) -> list[dict[str, object]]:
+    try:
+        value = json.loads(raw or "[]")
+    except json.JSONDecodeError as error:
+        raise BuildError(f"invalid JSON from {context}: {error}") from error
+    if not isinstance(value, list):
+        raise BuildError(f"expected a JSON list from {context}")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def release_assets_repository(plan: ReleasePlan, default_repo: str) -> str:
+    metadata = plan.release_repo / ".zhanlu" / "release-delivery.json"
+    if not metadata.is_file():
+        return default_repo
+    try:
+        value = json.loads(metadata.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default_repo
+    if not isinstance(value, dict):
+        return default_repo
+    if value.get("releaseVersion") not in (None, "", plan.release_version):
+        return default_repo
+    repository = value.get("assetsRepository")
+    return repository if isinstance(repository, str) and repository else default_repo
+
+
+def report_github_release(
+    plan: ReleasePlan,
+    runner: CommandRunner,
+    repo_slug: str,
+    environment: Mapping[str, str],
+    output: TextIO,
+) -> str:
+    assets_repository = release_assets_repository(plan, repo_slug)
+    result = runner.run(
+        [
+            "gh",
+            "release",
+            "view",
+            plan.release_version,
+            "--repo",
+            assets_repository,
+            "--json",
+            "url,isDraft",
+        ],
+        cwd=plan.release_repo,
+        env=environment,
+    )
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise BuildError(f"invalid JSON from gh release view: {error}") from error
+    if not isinstance(value, dict) or not value.get("url"):
+        raise BuildError("GitHub Release exists but its URL could not be resolved")
+    visibility = "draft" if value.get("isDraft") else "published"
+    print(f"GitHub Release ({visibility}): {value['url']}", file=output)
+    return assets_repository
+
+
+def list_workflow_runs(
+    runner: CommandRunner,
+    repo_slug: str,
+    workflow: str,
+    environment: Mapping[str, str],
+    cwd: Path,
+) -> list[dict[str, object]]:
+    result = runner.run(
+        [
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            repo_slug,
+            "--workflow",
+            workflow,
+            "--event",
+            "workflow_dispatch",
+            "--limit",
+            "20",
+            "--json",
+            "databaseId,createdAt,headBranch,status,conclusion,url",
+        ],
+        cwd=cwd,
+        env=environment,
+    )
+    return parse_json_list(result.stdout, f"gh run list {workflow}")
+
+
+def capture_run_baseline(
+    plan: ReleasePlan,
+    runner: CommandRunner,
+    repo_slug: str,
+    environment: Mapping[str, str],
+) -> dict[str, set[int]]:
+    baseline: dict[str, set[int]] = {}
+    for workflow in plan.workflows:
+        baseline[workflow] = {
+            int(item["databaseId"])
+            for item in list_workflow_runs(
+                runner, repo_slug, workflow, environment, plan.release_repo
+            )
+            if isinstance(item.get("databaseId"), int)
+        }
+    return baseline
+
+
+def discover_new_runs(
+    plan: ReleasePlan,
+    runner: CommandRunner,
+    repo_slug: str,
+    environment: Mapping[str, str],
+    baseline: Mapping[str, set[int]],
+    output: TextIO,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, dict[str, object]]:
+    deadline = monotonic() + plan.config.discovery_timeout
+    found: dict[str, dict[str, object]] = {}
+    while len(found) < len(plan.workflows):
+        for workflow in plan.workflows:
+            if workflow in found:
+                continue
+            candidates = [
+                item
+                for item in list_workflow_runs(
+                    runner, repo_slug, workflow, environment, plan.release_repo
+                )
+                if isinstance(item.get("databaseId"), int)
+                and int(item["databaseId"]) not in baseline.get(workflow, set())
+                and item.get("headBranch") in (None, "", "master")
+            ]
+            if len(candidates) > 1:
+                ids = ", ".join(str(item["databaseId"]) for item in candidates)
+                raise BuildError(
+                    f"ambiguous new runs for {workflow}: {ids}; refusing to attribute one"
+                )
+            if len(candidates) == 1:
+                found[workflow] = candidates[0]
+                print(
+                    f"Discovered {workflow}: {candidates[0].get('url', candidates[0]['databaseId'])}",
+                    file=output,
+                )
+        if len(found) == len(plan.workflows):
+            break
+        if monotonic() >= deadline:
+            missing = ", ".join(w for w in plan.workflows if w not in found)
+            raise BuildError(f"timed out discovering workflow runs: {missing}")
+        sleep(plan.config.poll_interval)
+    return found
+
+
+def view_run(
+    runner: CommandRunner,
+    repo_slug: str,
+    run_id: int,
+    environment: Mapping[str, str],
+    cwd: Path,
+) -> dict[str, object]:
+    result = runner.run(
+        [
+            "gh",
+            "run",
+            "view",
+            str(run_id),
+            "--repo",
+            repo_slug,
+            "--json",
+            "status,conclusion,url,workflowName,jobs",
+        ],
+        cwd=cwd,
+        env=environment,
+    )
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise BuildError(f"invalid JSON from gh run view {run_id}: {error}") from error
+    if not isinstance(value, dict):
+        raise BuildError(f"expected a JSON object from gh run view {run_id}")
+    return value
+
+
+def monitor_runs(
+    plan: ReleasePlan,
+    runner: CommandRunner,
+    repo_slug: str,
+    environment: Mapping[str, str],
+    runs: Mapping[str, Mapping[str, object]],
+    output: TextIO,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    pending = dict(runs)
+    successful = True
+    last_status: dict[str, str] = {}
+    while pending:
+        for workflow, run in list(pending.items()):
+            run_id = int(run["databaseId"])
+            detail = view_run(
+                runner, repo_slug, run_id, environment, plan.release_repo
+            )
+            status = str(detail.get("status") or "unknown")
+            if last_status.get(workflow) != status:
+                print(f"{workflow}: {status}", file=output)
+                last_status[workflow] = status
+            if status != TERMINAL_STATUS:
+                continue
+            conclusion = str(detail.get("conclusion") or "unknown")
+            url = str(detail.get("url") or run.get("url") or run_id)
+            print(f"{workflow}: {conclusion} {url}", file=output)
+            if conclusion != "success":
+                successful = False
+                jobs = detail.get("jobs")
+                if isinstance(jobs, list):
+                    failed = [
+                        str(job.get("name"))
+                        for job in jobs
+                        if isinstance(job, dict)
+                        and job.get("conclusion") not in ("success", "skipped", None)
+                    ]
+                    if failed:
+                        print(f"  failed jobs: {', '.join(failed)}", file=output)
+            del pending[workflow]
+        if pending:
+            sleep(plan.config.poll_interval)
+    return successful
+
+
+def execute(
+    plan: ReleasePlan,
+    runner: CommandRunner | None = None,
+    output: TextIO = sys.stdout,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    active_runner = runner or CommandRunner()
+    validate_native_scripts(plan)
+    print_plan(plan, active_runner, output)
+    if not plan.config.apply:
+        return 0
+
+    environment = safe_environment(plan)
+    synchronize_sources(plan, active_runner, environment, output)
+    _, repo_slug = preflight_apply(
+        plan, active_runner, environment, output
+    )
+
+    if not plan.config.trigger_only:
+        print("Creating/updating the release before workflow fan-out...", file=output)
+        active_runner.run(
+            create_command(plan),
+            cwd=plan.release_repo,
+            env=environment,
+            capture=False,
+        )
+        if plan.gitlab_sync:
+            print(
+                "Component GitLab synchronization completed: "
+                f"release_zhanlu-ide_v{plan.release_version}_{plan.release_date}",
+                file=output,
+            )
+
+    report_github_release(plan, active_runner, repo_slug, environment, output)
+
+    baseline: dict[str, set[int]] = {}
+    if not plan.config.no_wait:
+        baseline = capture_run_baseline(plan, active_runner, repo_slug, environment)
+
+    print("Dispatching stable workflow(s)...", file=output)
+    active_runner.run(
+        trigger_command(plan),
+        cwd=plan.release_repo,
+        env=environment,
+        capture=False,
+    )
+
+    if plan.config.no_wait:
+        print(f"Workflows dispatched: https://github.com/{repo_slug}/actions", file=output)
+        return 0
+
+    runs = discover_new_runs(
+        plan,
+        active_runner,
+        repo_slug,
+        environment,
+        baseline,
+        output,
+        monotonic=monotonic,
+        sleep=sleep,
+    )
+    return 0 if monitor_runs(
+        plan, active_runner, repo_slug, environment, runs, output, sleep=sleep
+    ) else 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        config = parse_config(argv)
+        return execute(make_plan(config))
+    except BuildError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    except subprocess.CalledProcessError as error:
+        print(
+            f"ERROR: command failed ({error.returncode}): {command_text(error.cmd)}",
+            file=sys.stderr,
+        )
+        return error.returncode or 1
+    except KeyboardInterrupt:
+        print("ERROR: interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
