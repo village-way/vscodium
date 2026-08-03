@@ -32,7 +32,7 @@ docker compose -f deploy/compose.yaml up --build
 ## 生产交付
 
 1. 创建 GitHub App，权限仅为 Metadata read、Contents read/write、Actions read/write，并安装到 vscodium、五个组件仓库及 Delivery Profile 引用的资产仓库。
-2. 创建 GitLab 专用服务 Token（API、write_repository），把私钥、Token、数据库密码和 TLS 证书保存在仓库外。
+2. 创建 GitLab 专用服务 Token（API、write_repository），把私钥、Token、数据库密码、CSRF_HMAC_SECRET 和 TLS 证书保存在仓库外。
 3. 复制 `deploy/k8s/secrets.example.env` 到仓库外并替换占位值。`REPOSITORIES_JSON` 中的 URL 不得嵌入凭据。
 4. 用 MacMini 构建并推送两个 `linux/amd64` SHA 镜像：
 

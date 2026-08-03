@@ -1,6 +1,6 @@
-import { CronExpressionParser } from "cron-parser";
 import { getPool, closePool, withTransaction } from "@zhanlu/build-portal-db";
 import { resolveReleaseVersion, scheduleInputSchema } from "@zhanlu/build-portal-contracts";
+import { previousOccurrence } from "./scheduling.js";
 
 const SCAN_MS = 30_000; const CATCH_UP_MS = 15 * 60_000; const LOCK_ID = 0x5a48414e;
 let firstScan = true;
@@ -12,7 +12,7 @@ export async function scan(now = new Date()): Promise<number> {
     const schedules = await client.query("SELECT * FROM schedules WHERE enabled=true"); let created = 0;
     for (const row of schedules.rows) {
       const value = scheduleInputSchema.parse({ name: row.name, cron: row.cron, timezone: row.timezone, enabled: row.enabled, spec: row.spec });
-      const previous = CronExpressionParser.parse(value.cron, { currentDate: now, tz: value.timezone }).prev().toDate();
+      const previous = previousOccurrence(value.cron, value.timezone, now);
       const age = now.getTime() - previous.getTime();
       if (age < 0 || age > (firstScan ? CATCH_UP_MS : SCAN_MS + 5_000)) continue;
       const resolvedVersion = resolveReleaseVersion(value.spec, now);

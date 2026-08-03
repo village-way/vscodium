@@ -39,6 +39,7 @@ cat > "$tmpdir/runtime.env" <<EOF
 DATABASE_URL=$(require_secret DATABASE_URL)
 CONFIRMATION_SECRET=$(require_secret CONFIRMATION_SECRET)
 IP_HASH_SECRET=$(require_secret IP_HASH_SECRET)
+CSRF_HMAC_SECRET=$(require_secret CSRF_HMAC_SECRET)
 PUBLIC_ORIGIN=$(require_secret PUBLIC_ORIGIN)
 EOF
 cat > "$tmpdir/worker.env" <<EOF

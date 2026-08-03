@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { argon2id } from "@noble/hashes/argon2";
 import { getPool } from "@zhanlu/build-portal-db";
 
@@ -8,6 +8,15 @@ const SESSION_SECONDS = 12 * 60 * 60;
 export function secretHash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 export function ipHash(ip: string): string { return secretHash(`${process.env.IP_HASH_SECRET ?? requireSecret("IP_HASH_SECRET")}\0${ip}`); }
 function requireSecret(name: string): string { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value; }
+
+/**
+ * CSRF tokens are deterministic for the lifetime of a session.  The previous
+ * implementation rotated the token every time /auth/me was called, which
+ * meant that two tabs sharing one session could invalidate one another.
+ */
+export function csrfTokenFor(sessionId: string): string {
+  return createHmac("sha256", requireSecret("CSRF_HMAC_SECRET")).update(sessionId).digest("base64url");
+}
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16); const digest = argon2id(password, salt, { m: 65536, t: 3, p: 1, dkLen: 32 });
@@ -25,14 +34,14 @@ export async function login(username: string, password: string, ip: string): Pro
   const normalized = username.trim().toLowerCase();
   const hashedIp = ipHash(ip);
   const recent = await pool.query<{ count: string }>("SELECT count(*)::text AS count FROM login_attempts WHERE succeeded=false AND attempted_at > now() - interval '15 minutes' AND (username=$1 OR ip_hash=$2)", [normalized, hashedIp]);
-  if (Number(recent.rows[0]?.count ?? 0) >= 5) throw new AuthError("login rate limit exceeded", 429);
+  if (Number(recent.rows[0]?.count ?? 0) >= 5) throw new AuthError("登录尝试过于频繁，请 15 分钟后再试", 429);
   const result = await pool.query<{ id: string; username: string; password_hash: string }>("SELECT id, username, password_hash FROM users WHERE username=$1 AND disabled=false", [normalized]);
   const user = result.rows[0];
   const valid = user ? await verifyPassword(user.password_hash, password) : await verifyPassword(await hashPassword("rate-limit-equalizer"), password).then(() => false);
   await pool.query("INSERT INTO login_attempts(username, ip_hash, succeeded) VALUES($1,$2,$3)", [normalized, hashedIp, valid]);
-  if (!valid || !user) throw new AuthError("invalid credentials", 401);
+  if (!valid || !user) throw new AuthError("用户名或密码错误", 401);
   const sessionId = randomBytes(32).toString("base64url");
-  const csrfToken = randomBytes(32).toString("base64url");
+  const csrfToken = csrfTokenFor(sessionId);
   await pool.query("INSERT INTO sessions(id,user_id,csrf_hash,expires_at) VALUES($1,$2,$3,now()+($4 || ' seconds')::interval)", [secretHash(sessionId), user.id, secretHash(csrfToken), SESSION_SECONDS]);
   await audit(user.id, "auth.login", "session", null, hashedIp);
   return { sessionId, csrfToken, user: { id: user.id, username: user.username } };
@@ -47,11 +56,11 @@ export async function authenticate(cookieValue: string | undefined): Promise<Aut
   return { sessionId: cookieValue, userId: result.rows[0].user_id, username: result.rows[0].username, csrfHash: result.rows[0].csrf_hash };
 }
 
-export async function rotateCsrf(session: AuthSession): Promise<string> { const token = randomBytes(32).toString("base64url"); await getPool().query("UPDATE sessions SET csrf_hash=$2,last_seen_at=now() WHERE id=$1", [secretHash(session.sessionId), secretHash(token)]); return token; }
+export async function rotateCsrf(session: AuthSession): Promise<string> { return csrfTokenFor(session.sessionId); }
 
 export function verifyCsrf(session: AuthSession, token: string | undefined): boolean {
   if (!token) return false;
-  const actual = Buffer.from(secretHash(token)); const expected = Buffer.from(session.csrfHash);
+  const actual = Buffer.from(secretHash(token)); const expected = Buffer.from(secretHash(csrfTokenFor(session.sessionId)));
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 

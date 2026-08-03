@@ -8,6 +8,7 @@
     "dev": "pnpm --filter @zhanlu/build-portal-web dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:e2e": "tsx scripts/e2e-smoke.ts",
     "lint": "pnpm -r lint",
     "db:migrate": "pnpm --filter @zhanlu/build-portal-db migrate"
   },

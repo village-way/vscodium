@@ -17,6 +17,7 @@ services:
       PUBLIC_ORIGIN: https://localhost:30443
       CONFIRMATION_SECRET: local-confirmation-secret-change-me
       IP_HASH_SECRET: local-ip-secret-change-me
+      CSRF_HMAC_SECRET: local-csrf-secret-change-me
     depends_on: { postgres: { condition: service_healthy } }
   web:
     platform: linux/amd64
@@ -37,5 +38,12 @@ services:
       <<: *environment
       EXECUTOR_MODE: mock
     depends_on: { migrate: { condition: service_completed_successfully } }
+  caddy:
+    image: caddy:2.10.2-alpine
+    ports: ["30443:8443"]
+    volumes: ["./compose/Caddyfile:/etc/caddy/Caddyfile:ro", "caddy-data:/data", "caddy-config:/config"]
+    depends_on: { web: { condition: service_started } }
 volumes:
   postgres-data: {}
+  caddy-data: {}
+  caddy-config: {}

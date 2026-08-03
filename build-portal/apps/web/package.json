@@ -7,6 +7,7 @@
     "@zhanlu/build-portal-auth": "workspace:*",
     "@zhanlu/build-portal-contracts": "workspace:*",
     "@zhanlu/build-portal-db": "workspace:*",
+    "cron-parser": "5.3.1",
     "next": "15.5.22",
     "react": "19.1.1",
     "react-dom": "19.1.1"

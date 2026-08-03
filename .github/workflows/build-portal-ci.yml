@@ -38,3 +38,35 @@ jobs:
         with: { context: build-portal, file: build-portal/deploy/docker/Dockerfile.web, push: false, tags: zhanlu/build-portal-web:test }
       - uses: docker/build-push-action@v6
         with: { context: build-portal, file: build-portal/deploy/docker/Dockerfile.worker, push: false, tags: zhanlu/build-portal-worker:test }
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test
+    defaults: { run: { working-directory: build-portal } }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: "22", cache: pnpm, cache-dependency-path: build-portal/pnpm-lock.yaml }
+      - run: corepack enable && corepack prepare pnpm@10.17.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - name: Start disposable HTTPS stack
+        run: docker compose -f deploy/compose.yaml up -d --build postgres migrate web scheduler worker caddy
+      - name: Bootstrap disposable administrator
+        run: docker compose -f deploy/compose.yaml run --rm --no-deps -e BOOTSTRAP_ADMIN_USERNAME=admin -e BOOTSTRAP_ADMIN_PASSWORD=local-e2e-password-123456 web node /tools/auth/dist/bootstrap.js
+      - name: Wait for HTTPS endpoint
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -ksSf https://localhost:30443/api/health/ready >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Run HTTPS E2E
+        env:
+          NODE_TLS_REJECT_UNAUTHORIZED: "0"
+          E2E_BASE_URL: https://localhost:30443
+          E2E_USERNAME: admin
+          E2E_PASSWORD: local-e2e-password-123456
+        run: pnpm test:e2e
+      - name: Tear down disposable stack
+        if: always()
+        run: docker compose -f deploy/compose.yaml down -v
