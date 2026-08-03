@@ -84,6 +84,14 @@ spec:
           env:
             - { name: APP_COMPONENT, value: worker }
             - { name: WORKSPACE_ROOT, value: /var/lib/zhanlu-build/workspace }
+            # Keep the GitLab/GitHub synchronization cache on the dedicated NAS
+            # PVC.  The sync wrapper rejects non-mounted roots, so these paths
+            # also make dry-run and apply share the same cache and lock.
+            - { name: ZHANLU_SYNC_VOLUME_ROOT, value: /var/lib/zhanlu-build }
+            - { name: ZHANLU_SYNC_EXTERNAL_STATE_ROOT, value: /var/lib/zhanlu-build/git-sync }
+            - { name: ZHANLU_SYNC_EXTERNAL_TMP_ROOT, value: /var/lib/zhanlu-build/git-sync/tmp }
+            - { name: ZHANLU_SYNC_EXTERNAL_CACHE_ROOT, value: /var/lib/zhanlu-build/git-sync/cache }
+            - { name: ZHANLU_SYNC_LOCK_ROOT, value: /var/lib/zhanlu-build/git-sync/lock }
             # The dedicated NAS export maps all files to its service uid;
             # this isolated workspace is explicitly trusted by Git.
             - { name: GIT_CONFIG_COUNT, value: "3" }
