@@ -95,6 +95,12 @@ spec:
             # The worker PVC is declared by this Deployment; the base image's
             # mount-format probe is not portable across util-linux versions.
             - { name: ZHANLU_SYNC_SKIP_MOUNT_CHECK, value: "1" }
+            # Release tags are created by an empty commit in the dedicated
+            # checkout; keep its public history consistent with existing
+            # Zhanlu release commits instead of relying on container-global
+            # Git configuration.
+            - { name: RELEASE_GIT_USER_NAME, value: village-way }
+            - { name: RELEASE_GIT_USER_EMAIL, value: wandepen@163.com }
             # The dedicated NAS export maps all files to its service uid;
             # this isolated workspace is explicitly trusted by Git.
             - { name: GIT_CONFIG_COUNT, value: "3" }

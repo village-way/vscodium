@@ -4,6 +4,7 @@ import { authenticate, audit, AuthError, ipHash, login, logout, rotateCsrf, SESS
 import { buildSpecSchema, confirmationHash, resolveReleaseVersion, scheduleInputSchema } from "@zhanlu/build-portal-contracts";
 import { getPool } from "@zhanlu/build-portal-db";
 import { CronExpressionParser } from "cron-parser";
+import { decideBuildRetry } from "../../lib/retry";
 
 export const runtime = "nodejs";
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "cache-control": "no-store" } });
@@ -47,7 +48,28 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
   const cancelId = buildId(path, "cancel");
   if (cancelId && method === "POST") { await getPool().query("UPDATE builds SET cancel_requested_at=now(),phase=CASE WHEN phase IN ('preview_queued','previewing','awaiting_confirmation','queued') THEN 'cancelled' ELSE phase END,updated_at=now() WHERE id=$1", [cancelId]); await audit(session.userId, "build.cancel", "build", cancelId, ipHash(clientIp(request))); return json({ accepted: true }); }
   const retryId = buildId(path, "retry");
-  if (retryId && method === "POST") { const value = await body(request) as Record<string, unknown>; const platforms = Array.isArray(value.platforms) ? value.platforms : []; const changed = await getPool().query("UPDATE build_runs SET status='pending',conclusion=NULL,failed_jobs='[]',run_id=NULL,run_url=NULL,updated_at=now() WHERE build_id=$1 AND platform=ANY($2::text[]) AND conclusion IN ('failure','cancelled') RETURNING platform", [retryId, platforms]); if (!changed.rowCount) throw new HttpError("no failed or cancelled platform selected", 409); await getPool().query("UPDATE builds SET phase='queued',phase_reason='retry',updated_at=now() WHERE id=$1", [retryId]); await audit(session.userId, "build.retry", "build", retryId, ipHash(clientIp(request)), { platforms }); return json({ platforms: changed.rows.map((row) => row.platform) }); }
+  if (retryId && method === "POST") {
+    const value = await body(request) as Record<string, unknown>;
+    const requestedPlatforms = Array.isArray(value.platforms) ? value.platforms.filter((item): item is string => typeof item === "string") : [];
+    const build = await getPool().query("SELECT id,phase,spec,resolved FROM builds WHERE id=$1", [retryId]);
+    const row = build.rows[0]; if (!row) throw new HttpError("build not found", 404);
+    const runs = await getPool().query<{ platform: string; run_id: string | null; conclusion: string | null }>("SELECT platform,run_id,conclusion FROM build_runs WHERE build_id=$1 ORDER BY platform", [retryId]);
+    const failedPlatforms = runs.rows.filter((run) => ["failure", "cancelled"].includes(run.conclusion ?? "")).map((run) => run.platform);
+    const previousPhase = await getPool().query<{ phase: string }>("SELECT data->>'phase' AS phase FROM build_events WHERE build_id=$1 AND event='phase.changed' AND data->>'phase' NOT IN ('failed','cancelled','needs_attention') ORDER BY sequence DESC LIMIT 1", [retryId]);
+    const platforms = Array.isArray(row.resolved?.platforms) ? row.resolved.platforms.filter((item: unknown): item is string => typeof item === "string") : row.spec.platform === "all" ? ["macos", "linux", "windows"] : [row.spec.platform];
+    const decision = decideBuildRetry({ phase: row.phase, runCount: runs.rows.length, lastPhase: previousPhase.rows[0]?.phase, requestedPlatforms: platforms, failedPlatforms: requestedPlatforms.length ? failedPlatforms.filter((platform) => requestedPlatforms.includes(platform)) : failedPlatforms });
+    if (decision.mode === "full") {
+      await getPool().query("UPDATE builds SET phase='queued',phase_reason='retry requested after pre-dispatch failure',lease_owner=NULL,lease_expires_at=NULL,cancel_requested_at=NULL,updated_at=now() WHERE id=$1 AND phase='failed'", [retryId]);
+      await audit(session.userId, "build.retry", "build", retryId, ipHash(clientIp(request)), { mode: decision.mode, platforms: decision.platforms });
+      return json({ mode: decision.mode, platforms: decision.platforms });
+    }
+    if (decision.mode === "reject") throw new HttpError(decision.reason, 409);
+    if (!requestedPlatforms.length) throw new HttpError("no failed or cancelled platform selected", 409);
+    const changed = await getPool().query("UPDATE build_runs SET status='pending',conclusion=NULL,failed_jobs='[]',run_id=NULL,run_url=NULL,updated_at=now() WHERE build_id=$1 AND platform=ANY($2::text[]) AND conclusion IN ('failure','cancelled') RETURNING platform", [retryId, requestedPlatforms]);
+    if (!changed.rowCount) throw new HttpError("no failed or cancelled platform selected", 409);
+    await getPool().query("UPDATE builds SET phase='queued',phase_reason='retry',lease_owner=NULL,lease_expires_at=NULL,cancel_requested_at=NULL,updated_at=now() WHERE id=$1", [retryId]);
+    await audit(session.userId, "build.retry", "build", retryId, ipHash(clientIp(request)), { mode: decision.mode, platforms: changed.rows.map((row) => row.platform) }); return json({ mode: decision.mode, platforms: changed.rows.map((row) => row.platform) });
+  }
 
   if (route === "schedules" && method === "GET") { const result = await getPool().query("SELECT * FROM schedules WHERE archived_at IS NULL ORDER BY created_at DESC"); return json({ schedules: result.rows.map((row) => ({ ...row, next_run_at: row.enabled ? nextRunAt(row.cron, row.timezone) : null })) }); }
   if (route === "schedules" && method === "POST") { const value = scheduleInputSchema.parse(await body(request)); const inserted = await getPool().query("INSERT INTO schedules(name,cron,timezone,enabled,spec,created_by) VALUES($1,$2,$3,$4,$5::jsonb,$6) RETURNING *", [value.name,value.cron,value.timezone,value.enabled,JSON.stringify(value.spec),session.userId]); await getPool().query("INSERT INTO schedule_revisions(schedule_id,revision,snapshot,created_by) VALUES($1,1,$2::jsonb,$3)", [inserted.rows[0].id,JSON.stringify(value),session.userId]); await audit(session.userId,"schedule.create","schedule",inserted.rows[0].id,ipHash(clientIp(request))); return json({ schedule: inserted.rows[0] },201); }

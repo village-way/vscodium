@@ -8,6 +8,7 @@ import { appendBuildEvent, closePool, getPool } from "@zhanlu/build-portal-db";
 import { assertRepositoryAccess, github, installationToken, startCredentialBroker } from "@zhanlu/build-portal-github-app";
 import { runRelease } from "@zhanlu/build-portal-release-runner";
 import { decideRecovery } from "./recovery.js";
+import { configureReleaseGitIdentity } from "./git-identity.js";
 
 const run = promisify(execFile); const WORKER_ID = process.env.WORKER_ID ?? hostname(); const VERSION = process.env.PORTAL_VERSION ?? "development"; const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/var/lib/zhanlu-build/workspace"; const PREPARE_LOCK = 0x5a4c524c; const POLL_MS = Number(process.env.WORKER_POLL_MS ?? 5000);
 const workflowByPlatform = { macos: "stable-macos.yml", linux: "stable-linux.yml", windows: "stable-windows.yml" } as const;
@@ -26,6 +27,7 @@ async function ensureCheckout(name: string, branch: string): Promise<void> {
   const status = (await git(["-C", path, "status", "--porcelain"])).stdout.trim(); if (status) throw new Error(`dedicated checkout is dirty: ${name}`);
   await git(["-C", path, "fetch", "--prune", "origin", branch]); await git(["-C", path, "checkout", branch]);
   const head = (await git(["-C", path, "rev-parse", "HEAD"])).stdout.trim(); const remote = (await git(["-C", path, "rev-parse", `origin/${branch}`])).stdout.trim(); if (head !== remote) await git(["-C", path, "merge", "--ff-only", `origin/${branch}`]); const finalHead=(await git(["-C",path,"rev-parse","HEAD"])).stdout.trim();if(finalHead!==remote)throw new Error(`${name} must equal origin/${branch}: HEAD=${finalHead} remote=${remote}`);
+  await configureReleaseGitIdentity(path);
 }
 
 async function prepareWorkspace(spec: BuildSpec): Promise<void> { const githubRepos=Object.values(repositoryConfig()).flatMap((value)=>{const urls=typeof value==="string"?[value]:[value.github].filter((item):item is string=>Boolean(item));return urls.flatMap((url)=>{try{const parsed=new URL(url);if(parsed.hostname!=="github.com")return[];return[parsed.pathname.replace(/^\//,"").replace(/\.git$/,"")];}catch{return[];}});});await assertRepositoryAccess(githubRepos);await ensureCheckout("vscodium", "master"); if (spec.kind === "formal" && spec.syncGitLab && !spec.triggerOnly) for (const name of ["zhanlu-cloud","zhanlu-code","zhanlu-core","zhanlu-loc","zhanlu-vs"]) await ensureCheckout(name, "develop"); }

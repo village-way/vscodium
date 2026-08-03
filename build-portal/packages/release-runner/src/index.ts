@@ -20,13 +20,14 @@ export function buildArguments(spec: BuildSpec, requestId: string, workspace: st
 export async function runRelease(spec: BuildSpec, requestId: string, options: { workspace: string; apply: boolean; onLog?: (line: string) => Promise<void> }): Promise<RunnerResult> {
   const script = process.env.ZHANLU_BUILD_SCRIPT ?? `${options.workspace}/vscodium/.agents/skills/zhanlu-build/scripts/zhanlu_build.py`;
   const child = spawn("python3", [script, ...buildArguments(spec, requestId, options.workspace, options.apply)], { cwd: `${options.workspace}/vscodium`, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-  const jsonLines: string[] = [];let processing=Promise.resolve();const buffers={stdout:"",stderr:""};
-  const consumeLine=async(raw:string)=>{if(!raw)return;const line=redact(raw);if(line.startsWith("{"))jsonLines.push(line);await options.onLog?.(line);};
-  const consumeChunk=async(chunk:Buffer,stream:keyof typeof buffers)=>{const lines=(buffers[stream]+chunk.toString("utf8")).split(/\r?\n/);buffers[stream]=lines.pop()??"";for(const line of lines)await consumeLine(line);};
+  const jsonLines: string[] = []; let failureHint = ""; let processing=Promise.resolve();const buffers={stdout:"",stderr:""};
+  const consumeLine=async(raw:string)=>{if(!raw)return;const line=redact(raw);if(line.startsWith("{"))jsonLines.push(line);if(/^(?:ERROR|fatal:|error:)/i.test(line.trim()))failureHint=line.trim();await options.onLog?.(line);};
+  const consumeFailureLine=consumeLine;
+  const consumeChunk=async(chunk:Buffer,stream:keyof typeof buffers)=>{const lines=(buffers[stream]+chunk.toString("utf8")).split(/\r?\n/);buffers[stream]=lines.pop()??"";for(const line of lines)await (stream === "stderr" ? consumeFailureLine(line) : consumeLine(line));};
   child.stdout.on("data",(chunk:Buffer)=>{processing=processing.then(()=>consumeChunk(chunk,"stdout"));}); child.stderr.on("data",(chunk:Buffer)=>{processing=processing.then(()=>consumeChunk(chunk,"stderr"));});
   const code = await new Promise<number>((resolve, reject) => child.once("error", reject).once("close", (value) => resolve(value ?? 1)));
-  await processing;await consumeLine(buffers.stdout);await consumeLine(buffers.stderr);
-  if (code !== 0) throw new Error(`zhanlu_build.py exited with ${code}`);
+  await processing;await consumeLine(buffers.stdout);await consumeFailureLine(buffers.stderr);
+  if (code !== 0) throw new Error(`zhanlu_build.py exited with ${code}${failureHint ? `: ${failureHint}` : ""}`);
   for (const line of jsonLines.reverse()) {
     try { const value = JSON.parse(line) as RunnerResult; if (value.schemaVersion === "v1" && Array.isArray(value.runs)) return value; } catch { /* structured output only */ }
   }
