@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: zhanlu-build-nfs-provisioner
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: zhanlu-build-nfs-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nfs-client-provisioner-runner
+subjects:
+  - kind: ServiceAccount
+    name: zhanlu-build-nfs-provisioner
+    namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: leader-locking-zhanlu-build-nfs-provisioner
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get, list, watch, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: leader-locking-zhanlu-build-nfs-provisioner
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: leader-locking-zhanlu-build-nfs-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: zhanlu-build-nfs-provisioner
+    namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zhanlu-build-nfs-provisioner
+  namespace: default
+  labels: {app: zhanlu-build-nfs-provisioner}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: zhanlu-build-nfs-provisioner}}
+  template:
+    metadata: {labels: {app: zhanlu-build-nfs-provisioner}}
+    spec:
+      serviceAccountName: zhanlu-build-nfs-provisioner
+      nodeSelector: {kubernetes.io/arch: amd64}
+      tolerations: [{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}]
+      containers:
+        - name: nfs-provisioner
+          image: m.daocloud.io/registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2
+          env:
+            - {name: PROVISIONER_NAME, value: zhanlu.dev/build-nfs}
+            - {name: NFS_SERVER, value: 192.168.22.109}
+            - {name: NFS_PATH, value: /vol1/1000/k8s-build}
+          securityContext: {runAsUser: 0, runAsGroup: 0, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: nfs-root, mountPath: /persistentvolumes}]
+      volumes:
+        - name: nfs-root
+          nfs: {server: 192.168.22.109, path: /vol1/1000/k8s-build}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: {name: zhanlu-build-nfs-storage}
+provisioner: zhanlu.dev/build-nfs
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+parameters: {archiveOnDelete: "false"}

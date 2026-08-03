@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: postgres-backup }
+spec:
+  schedule: "30 2 * * *"
+  timeZone: Asia/Tokyo
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata: { labels: { app: build-portal, component: backup } }
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext: { seccompProfile: { type: RuntimeDefault }, fsGroup: 10001 }
+          containers:
+            - name: pg-dump
+              image: postgres:16.10-bookworm
+              command: [bash, -ceu, 'stamp=$(date -u +%Y%m%dT%H%M%SZ); pg_dump --format=custom --file="/backup/zhanlu-build-${stamp}.dump" "${DATABASE_URL}"; find /backup -type f -name "*.dump" -mtime +13 -delete']
+              env: [{ name: DATABASE_URL, valueFrom: { secretKeyRef: { name: build-portal-db, key: url } } }]
+              securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+              volumeMounts: [{ name: backup, mountPath: /backup }]
+          volumes: [{ name: backup, persistentVolumeClaim: { claimName: postgres-backup } }]

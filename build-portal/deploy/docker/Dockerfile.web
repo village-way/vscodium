@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1.7
+FROM node:22.22.0-bookworm-slim AS build
+WORKDIR /src
+RUN corepack enable && corepack prepare pnpm@10.17.1 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.base.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY apps/scheduler/package.json apps/scheduler/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/db/package.json packages/db/package.json
+COPY packages/auth/package.json packages/auth/package.json
+RUN pnpm install --frozen-lockfile
+COPY apps/web apps/web
+COPY apps/scheduler apps/scheduler
+COPY packages/contracts packages/contracts
+COPY packages/db packages/db
+COPY packages/auth packages/auth
+RUN pnpm --filter @zhanlu/build-portal-contracts build && pnpm --filter @zhanlu/build-portal-db build && pnpm --filter @zhanlu/build-portal-auth build && pnpm --filter @zhanlu/build-portal-web build && pnpm --filter @zhanlu/build-portal-scheduler build
+RUN pnpm --filter @zhanlu/build-portal-scheduler deploy --prod --legacy /out/scheduler \
+ && pnpm --filter @zhanlu/build-portal-db deploy --prod --legacy /out/db \
+ && pnpm --filter @zhanlu/build-portal-auth deploy --prod --legacy /out/auth
+
+FROM node:22.22.0-bookworm-slim AS runtime
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+WORKDIR /app
+COPY --from=build /src/apps/web/.next/standalone ./
+COPY --from=build /src/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build /out/scheduler /scheduler
+COPY --from=build /out/db /tools/db
+COPY --from=build /out/auth /tools/auth
+USER 10001:10001
+EXPOSE 3000
+CMD ["node","apps/web/server.js"]

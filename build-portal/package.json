@@ -1,0 +1,19 @@
+{
+  "name": "zhanlu-build-portal",
+  "private": true,
+  "packageManager": "pnpm@10.17.1",
+  "engines": { "node": "22.x" },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter @zhanlu/build-portal-web dev",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "db:migrate": "pnpm --filter @zhanlu/build-portal-db migrate"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.6",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

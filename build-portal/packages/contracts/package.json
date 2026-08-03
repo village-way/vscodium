@@ -1,0 +1,15 @@
+{
+  "name": "@zhanlu/build-portal-contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "exports": { ".": { "types": "./src/index.ts", "default": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/*.test.ts",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": { "zod": "4.1.11" }
+}

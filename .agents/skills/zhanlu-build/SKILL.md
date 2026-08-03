@@ -85,6 +85,13 @@ python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
 # Dispatch and return without monitoring
 python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
   --kind development --version 1.4.1 --no-wait
+
+# Machine-readable portal dispatch; the final JSON line uses schema v1 and
+# contains the exact workflow run IDs/URLs returned by GitHub
+python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
+  --kind development --version 1.4.1 --platform linux \
+  --request-id 71efcf01-7b10-4db0-9efd-f2af58f26a81 \
+  --generate-only --no-wait --output json
 ```
 
 Use `--source-branch`, `--zhanlu-core-ref`, `--zhanlu-vs-ref`,
@@ -118,6 +125,11 @@ non-default source or patch.
 - Use `--trigger-only` for retries of an existing Release. Pair it with
   `--publish` when the existing GitHub Release is already published so the
   native trigger does not try to restore draft visibility.
+- Reserve `--request-id` and `--output json` for machine callers. The native
+  workflow dispatch must return one exact run ID and URL per selected platform;
+  a missing response or ambiguous request-ID lookup is a blocking failure.
+- Use `--generate-only` only for development workflow-artifact validation. It
+  must not create, read, publish, or upload to a GitHub Release.
 
 ## Scope Boundary
 

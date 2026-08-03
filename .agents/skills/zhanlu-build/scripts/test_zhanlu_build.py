@@ -239,6 +239,29 @@ class ZhanluBuildTest(unittest.TestCase):
         )
         self.assertEqual(config.bundle_codex_runtime, "0")
 
+    def test_portal_contract_propagates_request_id_and_generate_only(self):
+        config = zhanlu_build.parse_config(
+            [
+                "--kind", "development", "--version", "1.4.1",
+                "--request-id", "portal-request-1", "--output", "json",
+                "--generate-only",
+            ]
+        )
+        plan = zhanlu_build.make_plan(config)
+        trigger = zhanlu_build.trigger_command(plan)
+        self.assertEqual(trigger[trigger.index("--request-id") + 1], "portal-request-1")
+        self.assertIn("--generate", trigger)
+        self.assertEqual(trigger[trigger.index("--output") + 1], "json")
+        self.assertEqual(zhanlu_build.plan_document(plan)["schemaVersion"], "v1")
+
+    def test_generate_only_never_creates_or_reads_a_release(self):
+        plan = zhanlu_build.make_plan(self.config(generate_only=True, apply=True))
+        runner = FakeRunner()
+        result, _ = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        self.assertFalse(self.command_calls(runner, ["bash", "create-release.sh"]))
+        self.assertFalse(self.command_calls(runner, ["gh", "release", "view"]))
+
     def test_no_gitlab_removes_g_and_component_preflight(self):
         plan = zhanlu_build.make_plan(
             self.config(

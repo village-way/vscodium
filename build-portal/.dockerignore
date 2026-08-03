@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+coverage
+.git
+.gitignore
+*.tsbuildinfo
+deploy/k8s/secrets.env
+deploy/k8s/*.key
+deploy/k8s/*.pem
+deploy/k8s/*.crt

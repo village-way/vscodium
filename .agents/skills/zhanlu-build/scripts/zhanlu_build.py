@@ -58,6 +58,9 @@ class Config:
     no_wait: bool
     poll_interval: float
     discovery_timeout: float
+    output_format: str = "text"
+    request_id: str | None = None
+    generate_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,16 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--apply", action="store_true")
     result.add_argument("--poll-interval", type=float, default=30.0)
     result.add_argument("--run-discovery-timeout", type=float, default=300.0)
+    result.add_argument("--output", choices=("text", "json"), default="text")
+    result.add_argument(
+        "--request-id",
+        help="Stable portal request UUID propagated to workflow run names",
+    )
+    result.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="Generate workflow artifacts without uploading to a Release",
+    )
     return result
 
 
@@ -180,6 +193,9 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         no_wait=args.no_wait,
         poll_interval=args.poll_interval,
         discovery_timeout=args.run_discovery_timeout,
+        output_format=args.output,
+        request_id=args.request_id,
+        generate_only=args.generate_only,
     )
 
 
@@ -232,6 +248,10 @@ def selected_workflows(platform: str) -> tuple[str, ...]:
 
 
 def make_plan(config: Config, now: dt.datetime | None = None) -> ReleasePlan:
+    if config.generate_only and config.kind != "development":
+        raise BuildError("--generate-only is only valid for development builds")
+    if config.generate_only and config.trigger_only:
+        raise BuildError("--generate-only cannot be combined with --trigger-only")
     current = now or dt.datetime.now().astimezone()
     release_version, version_time_patch = resolve_version(
         config.kind, config.version, config.time_patch, current
@@ -316,7 +336,7 @@ def create_command(plan: ReleasePlan) -> list[str]:
 
 
 def trigger_command(plan: ReleasePlan) -> list[str]:
-    return [
+    command = [
         "bash",
         "./scripts/trigger-stable-release.sh",
         "--workflow",
@@ -337,6 +357,36 @@ def trigger_command(plan: ReleasePlan) -> list[str]:
         "--version-time-patch",
         plan.version_time_patch,
     ]
+    if plan.config.generate_only:
+        command.append("--generate")
+    if plan.config.request_id:
+        command.extend(["--request-id", plan.config.request_id])
+    if plan.config.output_format == "json":
+        command.extend(["--output", "json"])
+    return command
+
+
+def plan_document(plan: ReleasePlan) -> dict[str, object]:
+    return {
+        "schemaVersion": "v1",
+        "requestId": plan.config.request_id,
+        "mode": "apply" if plan.config.apply else "preview",
+        "kind": plan.config.kind,
+        "releaseVersion": plan.release_version,
+        "versionTimePatch": plan.version_time_patch,
+        "sourceBranch": plan.config.source_branch,
+        "deliveryProfile": plan.config.delivery_profile,
+        "zhanluCoreRef": plan.config.zhanlu_core_ref,
+        "zhanluVsRef": plan.config.zhanlu_vs_ref,
+        "bundleCodexRuntime": plan.config.bundle_codex_runtime == "1",
+        "platform": plan.config.platform,
+        "generateOnly": plan.config.generate_only,
+        "triggerOnly": plan.config.trigger_only,
+        "syncGitLab": plan.gitlab_sync,
+        "publish": plan.config.publish,
+        "sourceSyncAllRefs": plan.source_sync_all_refs,
+        "workflows": list(plan.workflows),
+    }
 
 
 def safe_environment(plan: ReleasePlan) -> dict[str, str]:
@@ -430,6 +480,9 @@ def local_repo_snapshot(
 def print_plan(
     plan: ReleasePlan, runner: CommandRunner, output: TextIO = sys.stdout
 ) -> None:
+    if plan.config.output_format == "json":
+        print(json.dumps(plan_document(plan), sort_keys=True), file=output)
+        return
     mode = "APPLY" if plan.config.apply else "DRY RUN"
     print("Zhanlu build plan", file=output)
     print(f"  mode: {mode}", file=output)
@@ -450,7 +503,7 @@ def print_plan(
         file=output,
     )
     print(f"  GitHub visibility: {'draft' if plan.release_draft else 'published'}", file=output)
-    print(f"  create/update release: {'no' if plan.config.trigger_only else 'yes'}", file=output)
+    print(f"  create/update release: {'no' if plan.config.trigger_only or plan.config.generate_only else 'yes'}", file=output)
     print(f"  component GitLab sync: {'yes' if plan.gitlab_sync else 'no'}", file=output)
     if plan.gitlab_sync:
         print(
@@ -473,7 +526,7 @@ def print_plan(
     print("Native commands:", file=output)
     print("  " + command_text(source_sync_command(plan, dry_run=True)), file=output)
     print("  " + command_text(source_sync_command(plan, dry_run=False)), file=output)
-    if not plan.config.trigger_only:
+    if not plan.config.trigger_only and not plan.config.generate_only:
         print(
             "  "
             + f"RELEASE_VERSION={shlex.quote(plan.release_version)} "
@@ -837,12 +890,16 @@ def execute(
         return 0
 
     environment = safe_environment(plan)
-    synchronize_sources(plan, active_runner, environment, output)
+    # A failed-platform retry must not repeat source synchronization.  The
+    # existing Release is the immutable anchor for trigger-only recovery;
+    # preflight and the dispatch script still validate the checkout/Release.
+    if not plan.config.trigger_only:
+        synchronize_sources(plan, active_runner, environment, output)
     _, repo_slug = preflight_apply(
         plan, active_runner, environment, output
     )
 
-    if not plan.config.trigger_only:
+    if not plan.config.trigger_only and not plan.config.generate_only:
         print("Creating/updating the release before workflow fan-out...", file=output)
         active_runner.run(
             create_command(plan),
@@ -857,19 +914,33 @@ def execute(
                 file=output,
             )
 
-    report_github_release(plan, active_runner, repo_slug, environment, output)
+    if not plan.config.generate_only:
+        report_github_release(plan, active_runner, repo_slug, environment, output)
 
     baseline: dict[str, set[int]] = {}
     if not plan.config.no_wait:
         baseline = capture_run_baseline(plan, active_runner, repo_slug, environment)
 
     print("Dispatching stable workflow(s)...", file=output)
-    active_runner.run(
+    trigger_result = active_runner.run(
         trigger_command(plan),
         cwd=plan.release_repo,
         env=environment,
-        capture=False,
+        capture=plan.config.output_format == "json",
     )
+
+    dispatched_runs: list[dict[str, object]] = []
+    if plan.config.output_format == "json":
+        for line in trigger_result.stdout.splitlines():
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and candidate.get("schemaVersion") == "v1":
+                raw_runs = candidate.get("runs")
+                if isinstance(raw_runs, list):
+                    dispatched_runs = [item for item in raw_runs if isinstance(item, dict)]
+        print(json.dumps({**plan_document(plan), "runs": dispatched_runs}, sort_keys=True), file=output)
 
     if plan.config.no_wait:
         print(f"Workflows dispatched: https://github.com/{repo_slug}/actions", file=output)
