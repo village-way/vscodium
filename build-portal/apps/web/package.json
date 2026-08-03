@@ -1,0 +1,16 @@
+{
+  "name": "@zhanlu/build-portal-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "typecheck": "tsc --noEmit", "test": "tsx --test src/**/*.test.ts", "lint": "next lint || tsc --noEmit" },
+  "dependencies": {
+    "@zhanlu/build-portal-auth": "workspace:*",
+    "@zhanlu/build-portal-contracts": "workspace:*",
+    "@zhanlu/build-portal-db": "workspace:*",
+    "cron-parser": "5.3.1",
+    "next": "15.5.22",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": { "@types/react": "19.1.16", "@types/react-dom": "19.1.9" }
+}

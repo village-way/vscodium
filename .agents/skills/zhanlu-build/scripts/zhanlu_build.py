@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterable, Mapping, Sequence, TextIO
@@ -58,6 +59,13 @@ class Config:
     no_wait: bool
     poll_interval: float
     discovery_timeout: float
+    output_format: str = "text"
+    request_id: str | None = None
+    generate_only: bool = False
+    selected_source_sync: bool = False
+    source_commit: str | None = None
+    zhanlu_core_commit: str | None = None
+    zhanlu_vs_commit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,7 +84,7 @@ class ReleasePlan:
 
     @property
     def source_sync_all_refs(self) -> bool:
-        return any(
+        return not self.config.selected_source_sync and any(
             ref != "develop"
             for ref in (
                 self.config.source_branch,
@@ -91,6 +99,19 @@ class CommandResult:
     stdout: str = ""
     stderr: str = ""
     returncode: int = 0
+
+
+@dataclass(frozen=True)
+class ResolvedSourceRef:
+    repository: str
+    ref_type: str
+    requested_ref: str
+    source_ref: str
+    destination_ref: str
+    source_object_sha: str
+    source_commit_sha: str
+    destination_sha: str
+    action: str
 
 
 class CommandRunner:
@@ -153,6 +174,24 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--apply", action="store_true")
     result.add_argument("--poll-interval", type=float, default=30.0)
     result.add_argument("--run-discovery-timeout", type=float, default=300.0)
+    result.add_argument("--output", choices=("text", "json"), default="text")
+    result.add_argument(
+        "--request-id",
+        help="Stable portal request UUID propagated to workflow run names",
+    )
+    result.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="Generate workflow artifacts without uploading to a Release",
+    )
+    result.add_argument(
+        "--selected-source-sync",
+        action="store_true",
+        help="Synchronize only the three explicitly selected component refs",
+    )
+    result.add_argument("--source-commit", help=argparse.SUPPRESS)
+    result.add_argument("--zhanlu-core-commit", help=argparse.SUPPRESS)
+    result.add_argument("--zhanlu-vs-commit", help=argparse.SUPPRESS)
     return result
 
 
@@ -162,6 +201,13 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         raise BuildError("--poll-interval must be greater than zero")
     if args.run_discovery_timeout < 0:
         raise BuildError("--run-discovery-timeout cannot be negative")
+    for name, value in (
+        ("--source-commit", args.source_commit),
+        ("--zhanlu-core-commit", args.zhanlu_core_commit),
+        ("--zhanlu-vs-commit", args.zhanlu_vs_commit),
+    ):
+        if value is not None and not re.fullmatch(r"[0-9a-f]{40}", value):
+            raise BuildError(f"{name} must be an exact lowercase 40-character Git SHA")
     return Config(
         workspace=args.workspace.resolve(),
         kind=args.kind,
@@ -180,6 +226,13 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         no_wait=args.no_wait,
         poll_interval=args.poll_interval,
         discovery_timeout=args.run_discovery_timeout,
+        output_format=args.output,
+        request_id=args.request_id,
+        generate_only=args.generate_only,
+        selected_source_sync=args.selected_source_sync,
+        source_commit=args.source_commit,
+        zhanlu_core_commit=args.zhanlu_core_commit,
+        zhanlu_vs_commit=args.zhanlu_vs_commit,
     )
 
 
@@ -232,6 +285,10 @@ def selected_workflows(platform: str) -> tuple[str, ...]:
 
 
 def make_plan(config: Config, now: dt.datetime | None = None) -> ReleasePlan:
+    if config.generate_only and config.kind != "development":
+        raise BuildError("--generate-only is only valid for development builds")
+    if config.generate_only and config.trigger_only:
+        raise BuildError("--generate-only cannot be combined with --trigger-only")
     current = now or dt.datetime.now().astimezone()
     release_version, version_time_patch = resolve_version(
         config.kind, config.version, config.time_patch, current
@@ -257,12 +314,16 @@ def validate_native_scripts(plan: ReleasePlan) -> None:
     create_script = plan.release_repo / "create-release.sh"
     trigger_script = plan.release_repo / "scripts" / "trigger-stable-release.sh"
     sync_script = plan.release_repo / "scripts" / "sync-zhanlu-gitlab-to-github.sh"
+    selected_sync_script = (
+        plan.release_repo / "scripts" / "sync-zhanlu-selected-refs.sh"
+    )
     sync_config = plan.release_repo / "scripts" / "sync-zhanlu-gitlab-to-github.repos"
     if (
         not create_script.is_file()
         or not trigger_script.is_file()
         or not sync_script.is_file()
         or not sync_config.is_file()
+        or (plan.config.selected_source_sync and not selected_sync_script.is_file())
     ):
         raise BuildError(
             f"missing native release scripts under canonical checkout: {plan.release_repo}"
@@ -289,6 +350,13 @@ def validate_native_scripts(plan: ReleasePlan) -> None:
             raise BuildError(
                 f"sync-zhanlu-gitlab-to-github.sh lacks required capability: {token}"
             )
+    if plan.config.selected_source_sync:
+        selected_text = selected_sync_script.read_text(encoding="utf-8")
+        for token in ("--ref", "--output-plan", "--apply-plan"):
+            if token not in selected_text:
+                raise BuildError(
+                    f"sync-zhanlu-selected-refs.sh lacks required capability: {token}"
+                )
 
 
 def source_sync_command(plan: ReleasePlan, *, dry_run: bool) -> list[str]:
@@ -297,6 +365,25 @@ def source_sync_command(plan: ReleasePlan, *, dry_run: bool) -> list[str]:
         command.append("--dry-run")
     if plan.source_sync_all_refs:
         command.append("--all-refs")
+    return command
+
+
+def selected_source_sync_command(
+    plan: ReleasePlan, *, dry_run: bool, plan_file: Path
+) -> list[str]:
+    command = ["bash", "./scripts/sync-zhanlu-selected-refs.sh"]
+    if dry_run:
+        command.extend(
+            [
+                "--dry-run",
+                "--ref", f"zhanlu-code={plan.config.source_branch}",
+                "--ref", f"zhanlu-core={plan.config.zhanlu_core_ref}",
+                "--ref", f"zhanlu-vs={plan.config.zhanlu_vs_ref}",
+                "--output-plan", str(plan_file),
+            ]
+        )
+    else:
+        command.extend(["--apply-plan", str(plan_file)])
     return command
 
 
@@ -315,8 +402,21 @@ def create_command(plan: ReleasePlan) -> list[str]:
     return command
 
 
-def trigger_command(plan: ReleasePlan) -> list[str]:
-    return [
+def trigger_command(
+    plan: ReleasePlan,
+    resolved_sources: Mapping[str, ResolvedSourceRef] | None = None,
+) -> list[str]:
+    core_ref = (
+        resolved_sources["zhanlu-core"].source_commit_sha
+        if resolved_sources and "zhanlu-core" in resolved_sources
+        else plan.config.zhanlu_core_commit or plan.config.zhanlu_core_ref
+    )
+    vs_ref = (
+        resolved_sources["zhanlu-vs"].source_commit_sha
+        if resolved_sources and "zhanlu-vs" in resolved_sources
+        else plan.config.zhanlu_vs_commit or plan.config.zhanlu_vs_ref
+    )
+    command = [
         "bash",
         "./scripts/trigger-stable-release.sh",
         "--workflow",
@@ -325,9 +425,9 @@ def trigger_command(plan: ReleasePlan) -> list[str]:
         "--delivery-profile",
         plan.config.delivery_profile,
         "--zhanlu-core-ref",
-        plan.config.zhanlu_core_ref,
+        core_ref,
         "--zhanlu-vs-ref",
-        plan.config.zhanlu_vs_ref,
+        vs_ref,
         "--bundle-codex-runtime",
         plan.config.bundle_codex_runtime,
         "--platform",
@@ -337,9 +437,68 @@ def trigger_command(plan: ReleasePlan) -> list[str]:
         "--version-time-patch",
         plan.version_time_patch,
     ]
+    if plan.config.generate_only:
+        command.append("--generate")
+    if plan.config.request_id:
+        command.extend(["--request-id", plan.config.request_id])
+    if plan.config.output_format == "json":
+        command.extend(["--output", "json"])
+    return command
 
 
-def safe_environment(plan: ReleasePlan) -> dict[str, str]:
+def source_refs_document(
+    resolved_sources: Mapping[str, ResolvedSourceRef],
+) -> dict[str, dict[str, str]]:
+    return {
+        repository: {
+            "repository": item.repository,
+            "refType": item.ref_type,
+            "requestedRef": item.requested_ref,
+            "sourceRef": item.source_ref,
+            "destinationRef": item.destination_ref,
+            "gitlabSha": item.source_commit_sha,
+            "gitlabObjectSha": item.source_object_sha,
+            "previousGithubSha": item.destination_sha,
+            "action": item.action,
+        }
+        for repository, item in sorted(resolved_sources.items())
+    }
+
+
+def plan_document(
+    plan: ReleasePlan,
+    resolved_sources: Mapping[str, ResolvedSourceRef] | None = None,
+) -> dict[str, object]:
+    document: dict[str, object] = {
+        "schemaVersion": "v1",
+        "requestId": plan.config.request_id,
+        "mode": "apply" if plan.config.apply else "preview",
+        "kind": plan.config.kind,
+        "releaseVersion": plan.release_version,
+        "versionTimePatch": plan.version_time_patch,
+        "sourceBranch": plan.config.source_branch,
+        "deliveryProfile": plan.config.delivery_profile,
+        "zhanluCoreRef": plan.config.zhanlu_core_ref,
+        "zhanluVsRef": plan.config.zhanlu_vs_ref,
+        "bundleCodexRuntime": plan.config.bundle_codex_runtime == "1",
+        "platform": plan.config.platform,
+        "generateOnly": plan.config.generate_only,
+        "triggerOnly": plan.config.trigger_only,
+        "syncGitLab": plan.gitlab_sync,
+        "publish": plan.config.publish,
+        "sourceSyncAllRefs": plan.source_sync_all_refs,
+        "sourceSyncSelectedRefs": plan.config.selected_source_sync,
+        "workflows": list(plan.workflows),
+    }
+    if resolved_sources:
+        document["sourceRefs"] = source_refs_document(resolved_sources)
+    return document
+
+
+def safe_environment(
+    plan: ReleasePlan,
+    resolved_sources: Mapping[str, ResolvedSourceRef] | None = None,
+) -> dict[str, str]:
     result = dict(os.environ)
     result.update(
         {
@@ -354,6 +513,13 @@ def safe_environment(plan: ReleasePlan) -> dict[str, str]:
             "ZHANLU_BUNDLE_CODEX_RUNTIME": plan.config.bundle_codex_runtime,
         }
     )
+    source_commit = (
+        resolved_sources["zhanlu-code"].source_commit_sha
+        if resolved_sources and "zhanlu-code" in resolved_sources
+        else plan.config.source_commit
+    )
+    if source_commit:
+        result["ZHANLU_DELIVERY_SOURCE_COMMIT"] = source_commit
     return result
 
 
@@ -430,6 +596,9 @@ def local_repo_snapshot(
 def print_plan(
     plan: ReleasePlan, runner: CommandRunner, output: TextIO = sys.stdout
 ) -> None:
+    if plan.config.output_format == "json":
+        print(json.dumps(plan_document(plan), sort_keys=True), file=output)
+        return
     mode = "APPLY" if plan.config.apply else "DRY RUN"
     print("Zhanlu build plan", file=output)
     print(f"  mode: {mode}", file=output)
@@ -446,11 +615,17 @@ def print_plan(
     print(f"  platform: {plan.config.platform}", file=output)
     print(
         "  GitLab -> GitHub source sync: "
-        + ("all branches and tags" if plan.source_sync_all_refs else "default branches"),
+        + (
+            "selected refs only"
+            if plan.config.selected_source_sync
+            else "all branches and tags"
+            if plan.source_sync_all_refs
+            else "default branches"
+        ),
         file=output,
     )
     print(f"  GitHub visibility: {'draft' if plan.release_draft else 'published'}", file=output)
-    print(f"  create/update release: {'no' if plan.config.trigger_only else 'yes'}", file=output)
+    print(f"  create/update release: {'no' if plan.config.trigger_only or plan.config.generate_only else 'yes'}", file=output)
     print(f"  component GitLab sync: {'yes' if plan.gitlab_sync else 'no'}", file=output)
     if plan.gitlab_sync:
         print(
@@ -471,9 +646,20 @@ def print_plan(
             print(f"  {name}: state={state} branch={branch} sha={sha}", file=output)
 
     print("Native commands:", file=output)
-    print("  " + command_text(source_sync_command(plan, dry_run=True)), file=output)
-    print("  " + command_text(source_sync_command(plan, dry_run=False)), file=output)
-    if not plan.config.trigger_only:
+    if plan.config.selected_source_sync:
+        placeholder = Path("<selected-ref-plan>")
+        print(
+            "  " + command_text(selected_source_sync_command(plan, dry_run=True, plan_file=placeholder)),
+            file=output,
+        )
+        print(
+            "  " + command_text(selected_source_sync_command(plan, dry_run=False, plan_file=placeholder)),
+            file=output,
+        )
+    else:
+        print("  " + command_text(source_sync_command(plan, dry_run=True)), file=output)
+        print("  " + command_text(source_sync_command(plan, dry_run=False)), file=output)
+    if not plan.config.trigger_only and not plan.config.generate_only:
         print(
             "  "
             + f"RELEASE_VERSION={shlex.quote(plan.release_version)} "
@@ -576,9 +762,48 @@ def synchronize_sources(
     runner: CommandRunner,
     environment: Mapping[str, str],
     output: TextIO,
-) -> None:
+) -> dict[str, ResolvedSourceRef]:
     for tool in ("git", "bash"):
         require_tool(tool)
+    if plan.config.selected_source_sync:
+        print("Previewing selected GitLab -> GitHub refs...", file=output)
+        with tempfile.TemporaryDirectory(prefix="zhanlu-selected-ref-plan.") as directory:
+            plan_file = Path(directory) / "selected-refs.tsv"
+            runner.run(
+                selected_source_sync_command(
+                    plan, dry_run=True, plan_file=plan_file
+                ),
+                cwd=plan.release_repo,
+                env=environment,
+                capture=False,
+            )
+            resolved = parse_selected_ref_plan(plan_file)
+            expected = {"zhanlu-code", "zhanlu-core", "zhanlu-vs"}
+            if set(resolved) != expected:
+                raise BuildError(
+                    "selected-ref synchronization did not resolve exactly "
+                    "zhanlu-code, zhanlu-core, and zhanlu-vs"
+                )
+            print("Synchronizing selected GitLab refs to GitHub...", file=output)
+            runner.run(
+                selected_source_sync_command(
+                    plan, dry_run=False, plan_file=plan_file
+                ),
+                cwd=plan.release_repo,
+                env=environment,
+                capture=False,
+            )
+        event = {
+            "schemaVersion": "v1",
+            "event": "source_refs_resolved",
+            "sourceRefs": source_refs_document(resolved),
+        }
+        print(json.dumps(event, sort_keys=True), file=output)
+        print(
+            "GitLab -> GitHub source synchronization completed (selected refs).",
+            file=output,
+        )
+        return resolved
     print("Previewing GitLab -> GitHub source synchronization...", file=output)
     runner.run(
         source_sync_command(plan, dry_run=True),
@@ -595,6 +820,52 @@ def synchronize_sources(
     )
     scope = "all refs" if plan.source_sync_all_refs else "default branches"
     print(f"GitLab -> GitHub source synchronization completed ({scope}).", file=output)
+    return {}
+
+
+def parse_selected_ref_plan(path: Path) -> dict[str, ResolvedSourceRef]:
+    result: dict[str, ResolvedSourceRef] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise BuildError(f"could not read selected-ref plan: {error}") from error
+    for number, line in enumerate(lines, start=1):
+        fields = line.split("\t")
+        if len(fields) != 9:
+            raise BuildError(f"invalid selected-ref plan row {number}")
+        (
+            repository,
+            ref_type,
+            requested_ref,
+            source_ref,
+            destination_ref,
+            source_object_sha,
+            source_commit_sha,
+            destination_sha,
+            action,
+        ) = fields
+        if repository in result:
+            raise BuildError(f"duplicate selected-ref plan repository: {repository}")
+        if not re.fullmatch(r"[0-9a-f]{40}", source_object_sha) or not re.fullmatch(
+            r"[0-9a-f]{40}", source_commit_sha
+        ):
+            raise BuildError(f"invalid selected-ref SHA for {repository}")
+        if destination_sha == "-":
+            destination_sha = ""
+        elif not re.fullmatch(r"[0-9a-f]{40}", destination_sha):
+            raise BuildError(f"invalid previous GitHub SHA for {repository}")
+        result[repository] = ResolvedSourceRef(
+            repository=repository,
+            ref_type=ref_type,
+            requested_ref=requested_ref,
+            source_ref=source_ref,
+            destination_ref=destination_ref,
+            source_object_sha=source_object_sha,
+            source_commit_sha=source_commit_sha,
+            destination_sha=destination_sha,
+            action=action,
+        )
+    return result
 
 
 def parse_json_list(raw: str, context: str) -> list[dict[str, object]]:
@@ -836,13 +1107,21 @@ def execute(
     if not plan.config.apply:
         return 0
 
+    resolved_sources: dict[str, ResolvedSourceRef] = {}
     environment = safe_environment(plan)
-    synchronize_sources(plan, active_runner, environment, output)
+    # A failed-platform retry must not repeat source synchronization.  The
+    # existing Release is the immutable anchor for trigger-only recovery;
+    # preflight and the dispatch script still validate the checkout/Release.
+    if not plan.config.trigger_only:
+        resolved_sources = synchronize_sources(
+            plan, active_runner, environment, output
+        )
+        environment = safe_environment(plan, resolved_sources)
     _, repo_slug = preflight_apply(
         plan, active_runner, environment, output
     )
 
-    if not plan.config.trigger_only:
+    if not plan.config.trigger_only and not plan.config.generate_only:
         print("Creating/updating the release before workflow fan-out...", file=output)
         active_runner.run(
             create_command(plan),
@@ -857,19 +1136,42 @@ def execute(
                 file=output,
             )
 
-    report_github_release(plan, active_runner, repo_slug, environment, output)
+    if not plan.config.generate_only:
+        report_github_release(plan, active_runner, repo_slug, environment, output)
 
     baseline: dict[str, set[int]] = {}
     if not plan.config.no_wait:
         baseline = capture_run_baseline(plan, active_runner, repo_slug, environment)
 
     print("Dispatching stable workflow(s)...", file=output)
-    active_runner.run(
-        trigger_command(plan),
+    trigger_result = active_runner.run(
+        trigger_command(plan, resolved_sources),
         cwd=plan.release_repo,
         env=environment,
-        capture=False,
+        capture=plan.config.output_format == "json",
     )
+
+    dispatched_runs: list[dict[str, object]] = []
+    if plan.config.output_format == "json":
+        for line in trigger_result.stdout.splitlines():
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and candidate.get("schemaVersion") == "v1":
+                raw_runs = candidate.get("runs")
+                if isinstance(raw_runs, list):
+                    dispatched_runs = [item for item in raw_runs if isinstance(item, dict)]
+        print(
+            json.dumps(
+                {
+                    **plan_document(plan, resolved_sources),
+                    "runs": dispatched_runs,
+                },
+                sort_keys=True,
+            ),
+            file=output,
+        )
 
     if plan.config.no_wait:
         print(f"Workflows dispatched: https://github.com/{repo_slug}/actions", file=output)

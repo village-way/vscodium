@@ -1,0 +1,17 @@
+apiVersion: batch/v1
+kind: Job
+metadata: { name: build-portal-bootstrap-admin, namespace: zhanlu-build }
+spec:
+  backoffLimit: 0
+  template:
+    metadata: { labels: { app: build-portal, component: bootstrap } }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: bootstrap
+          image: 192.168.22.100:30002/zhanlu/build-portal-web:SET_GIT_SHA
+          command: [node, /tools/auth/dist/bootstrap.js]
+          envFrom: [{ secretRef: { name: build-portal-runtime } }, { secretRef: { name: build-portal-bootstrap } }]
+          securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }

@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: zhanlu-build
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - postgres.yaml
+  - migration.yaml
+  - applications.yaml
+  - backup.yaml
+  - network-policy.yaml
+configMapGenerator:
+  - name: build-portal-caddy
+    files: [Caddyfile=Caddyfile]
+generatorOptions:
+  disableNameSuffixHash: true
+images:
+  - name: zhanlu/build-portal-web
+    newName: 192.168.22.100:30002/zhanlu/build-portal-web
+    newTag: SET_GIT_SHA
+  - name: zhanlu/build-portal-worker
+    newName: 192.168.22.100:30002/zhanlu/build-portal-worker
+    newTag: SET_GIT_SHA

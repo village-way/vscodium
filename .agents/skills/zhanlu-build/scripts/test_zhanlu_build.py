@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 from io import StringIO
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("zhanlu_build.py")
+REPOSITORY_ROOT = SCRIPT.parents[4]
 SPEC = importlib.util.spec_from_file_location("zhanlu_build", SCRIPT)
 assert SPEC and SPEC.loader
 zhanlu_build = importlib.util.module_from_spec(SPEC)
@@ -97,6 +99,40 @@ class FakeRunner:
             if "--dry-run" not in command and self.fail_sync_apply:
                 raise subprocess.CalledProcessError(2, command)
             return zhanlu_build.CommandResult()
+        if command[:2] == ["bash", "./scripts/sync-zhanlu-selected-refs.sh"]:
+            if "--dry-run" in command:
+                if self.fail_sync_preview:
+                    raise subprocess.CalledProcessError(1, command)
+                plan_file = Path(command[command.index("--output-plan") + 1])
+                selected = [
+                    command[index + 1]
+                    for index, value in enumerate(command)
+                    if value == "--ref"
+                ]
+                rows = []
+                for number, value in enumerate(selected, start=1):
+                    repository, requested = value.split("=", 1)
+                    source_sha = str(number) * 40
+                    previous_sha = str(number + 3) * 40
+                    rows.append(
+                        "\t".join(
+                            [
+                                repository,
+                                "branch",
+                                requested,
+                                f"refs/heads/{requested}",
+                                f"refs/heads/{requested}",
+                                source_sha,
+                                source_sha,
+                                previous_sha,
+                                "update",
+                            ]
+                        )
+                    )
+                plan_file.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            elif self.fail_sync_apply:
+                raise subprocess.CalledProcessError(2, command)
+            return zhanlu_build.CommandResult()
         if command[:2] == ["bash", "create-release.sh"]:
             if self.fail_create:
                 raise subprocess.CalledProcessError(9, command)
@@ -127,6 +163,10 @@ class ZhanluBuildTest(unittest.TestCase):
         )
         (self.release_repo / "scripts" / "sync-zhanlu-gitlab-to-github.sh").write_text(
             "case x in\n--dry-run) ;;\n--all-refs) ;;\nesac\n",
+            encoding="utf-8",
+        )
+        (self.release_repo / "scripts" / "sync-zhanlu-selected-refs.sh").write_text(
+            "case x in\n--ref) ;;\n--output-plan) ;;\n--apply-plan) ;;\nesac\n",
             encoding="utf-8",
         )
         (
@@ -233,11 +273,191 @@ class ZhanluBuildTest(unittest.TestCase):
             "--all-refs", zhanlu_build.source_sync_command(plan, dry_run=True)
         )
 
+    def test_portal_selected_sync_never_uses_all_refs(self):
+        plan = zhanlu_build.make_plan(
+            self.config(
+                selected_source_sync=True,
+                source_branch="feature/code",
+                zhanlu_core_ref="develop",
+                zhanlu_vs_ref="refs/tags/v2",
+            )
+        )
+        self.assertFalse(plan.source_sync_all_refs)
+        command = zhanlu_build.selected_source_sync_command(
+            plan, dry_run=True, plan_file=Path("plan.tsv")
+        )
+        self.assertNotIn("--all-refs", command)
+        self.assertIn("zhanlu-code=feature/code", command)
+        self.assertIn("zhanlu-core=develop", command)
+        self.assertIn("zhanlu-vs=refs/tags/v2", command)
+
+    def test_selected_sync_pins_workflow_refs_and_emits_source_refs(self):
+        plan = zhanlu_build.make_plan(
+            self.config(
+                apply=True,
+                selected_source_sync=True,
+                source_branch="feature/code",
+                zhanlu_core_ref="feature/core",
+                zhanlu_vs_ref="feature/vs",
+                output_format="json",
+            )
+        )
+        runner = FakeRunner()
+        result, output = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        selected_calls = self.command_calls(
+            runner, ["bash", "./scripts/sync-zhanlu-selected-refs.sh"]
+        )
+        self.assertEqual(len(selected_calls), 2)
+        self.assertNotIn("--all-refs", " ".join(selected_calls[0][0]))
+        trigger = self.command_calls(
+            runner, ["bash", "./scripts/trigger-stable-release.sh"]
+        )[0]
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-core-ref") + 1], "2" * 40)
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-vs-ref") + 1], "3" * 40)
+        self.assertEqual(trigger[2]["ZHANLU_DELIVERY_SOURCE_COMMIT"], "1" * 40)
+        self.assertIn('"event": "source_refs_resolved"', output)
+        self.assertIn('"sourceRefs"', output)
+
+    def test_trigger_only_reuses_persisted_source_commits(self):
+        plan = zhanlu_build.make_plan(
+            self.config(
+                apply=True,
+                trigger_only=True,
+                platform="linux",
+                selected_source_sync=True,
+                source_branch="feature/code",
+                source_commit="a" * 40,
+                zhanlu_core_commit="b" * 40,
+                zhanlu_vs_commit="c" * 40,
+            )
+        )
+        runner = FakeRunner()
+        result, _ = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        self.assertFalse(
+            self.command_calls(runner, ["bash", "./scripts/sync-zhanlu-selected-refs.sh"])
+        )
+        trigger = self.command_calls(
+            runner, ["bash", "./scripts/trigger-stable-release.sh"]
+        )[0]
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-core-ref") + 1], "b" * 40)
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-vs-ref") + 1], "c" * 40)
+        self.assertEqual(trigger[2]["ZHANLU_DELIVERY_SOURCE_COMMIT"], "a" * 40)
+
     def test_cli_defaults_codex_runtime_bundle_to_zero(self):
         config = zhanlu_build.parse_config(
             ["--kind", "development", "--version", "1.4.1"]
         )
         self.assertEqual(config.bundle_codex_runtime, "0")
+
+    def test_portal_contract_propagates_request_id_and_generate_only(self):
+        config = zhanlu_build.parse_config(
+            [
+                "--kind", "development", "--version", "1.4.1",
+                "--request-id", "portal-request-1", "--output", "json",
+                "--generate-only",
+            ]
+        )
+        plan = zhanlu_build.make_plan(config)
+        trigger = zhanlu_build.trigger_command(plan)
+        self.assertEqual(trigger[trigger.index("--request-id") + 1], "portal-request-1")
+        self.assertIn("--generate", trigger)
+        self.assertEqual(trigger[trigger.index("--output") + 1], "json")
+        self.assertEqual(zhanlu_build.plan_document(plan)["schemaVersion"], "v1")
+
+    def test_generate_only_never_creates_or_reads_a_release(self):
+        plan = zhanlu_build.make_plan(self.config(generate_only=True, apply=True))
+        runner = FakeRunner()
+        result, _ = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        self.assertFalse(self.command_calls(runner, ["bash", "create-release.sh"]))
+        self.assertFalse(self.command_calls(runner, ["gh", "release", "view"]))
+
+    def test_native_script_ignores_stale_local_release_metadata(self):
+        native_script = REPOSITORY_ROOT / "scripts" / "trigger-stable-release.sh"
+        scripts = self.release_repo / "scripts"
+        (scripts / "trigger-stable-release.sh").write_text(
+            native_script.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        (scripts / "resolve-release-delivery-profile.sh").write_text(
+            "resolve_release_delivery_profile() {\n"
+            "  ZHANLU_DELIVERY_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "  ZHANLU_DELIVERY_PROFILE_DIGEST=test-digest\n"
+            "  ZHANLU_DELIVERY_ASSETS_REPOSITORY=village-way/vscodium\n"
+            "  export ZHANLU_DELIVERY_SOURCE_COMMIT ZHANLU_DELIVERY_PROFILE_DIGEST ZHANLU_DELIVERY_ASSETS_REPOSITORY\n"
+            "}\n"
+            "prepare_release_delivery_profile() {\n"
+            "  resolve_release_delivery_profile\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        metadata = self.release_repo / ".zhanlu" / "release-delivery.json"
+        metadata.parent.mkdir()
+        metadata.write_text(
+            '{"releaseVersion":"1.4.15198","deliveryProfile":"default",'
+            '"sourceRef":"fix_CMSSAIYSYFXFS-400_codex",'
+            '"assetsRepository":"village-way/vscodium"}\n',
+            encoding="utf-8",
+        )
+        binaries = self.workspace / "bin"
+        binaries.mkdir()
+        gh_calls = self.workspace / "gh-calls"
+        (binaries / "gh").write_text(
+            "#!/usr/bin/env sh\n"
+            "printf '%s\\n' \"$*\" >> \"$GH_CALL_LOG\"\n"
+            "case \"$*\" in\n"
+            "  'auth status') exit 0 ;;\n"
+            "  'repo view --json nameWithOwner -q .nameWithOwner') echo village-way/vscodium ;;\n"
+            "  release\\ download*) exit 1 ;;\n"
+            "  *) echo \"unexpected gh call: $*\" >&2; exit 97 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        (binaries / "git").write_text(
+            "#!/usr/bin/env sh\n"
+            "if [ \"$*\" = 'branch --show-current' ]; then echo master; else exit 98; fi\n",
+            encoding="utf-8",
+        )
+        (binaries / "gh").chmod(0o755)
+        (binaries / "git").chmod(0o755)
+        environment = {
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "GH_CALL_LOG": str(gh_calls),
+        }
+        result = subprocess.run(
+            [
+                "bash", "./scripts/trigger-stable-release.sh", "--workflow",
+                "--generate", "--dry-run", "--source-branch", "develop",
+                "--delivery-profile", "default", "--platform", "linux",
+                "--release-version", "1.4.25202", "--version-time-patch", "5202",
+            ],
+            cwd=self.release_repo,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("unexpected gh call", result.stderr)
+        self.assertNotIn("release download", gh_calls.read_text(encoding="utf-8"))
+
+        gh_calls.write_text("", encoding="utf-8")
+        result = subprocess.run(
+            [
+                "bash", "./scripts/trigger-stable-release.sh", "--workflow",
+                "--dry-run", "--source-branch", "develop",
+                "--delivery-profile", "default", "--platform", "linux",
+                "--release-version", "1.4.25202", "--version-time-patch", "5202",
+            ],
+            cwd=self.release_repo,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("已固定为", result.stdout + result.stderr)
 
     def test_no_gitlab_removes_g_and_component_preflight(self):
         plan = zhanlu_build.make_plan(

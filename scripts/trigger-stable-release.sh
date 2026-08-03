@@ -49,6 +49,8 @@ ZHANLU_BUNDLE_CODEX_RUNTIME="${ZHANLU_BUNDLE_CODEX_RUNTIME:-0}"
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 # 内部 VS Code 兼容版本的 4 位补丁号；为空时 zhanlu-code 会从 RELEASE_VERSION 派生
 VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
+REQUEST_ID=""
+OUTPUT_FORMAT="text"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -93,6 +95,8 @@ VSCodium Stable 版本手动触发脚本
   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
   --version-time-patch 指定内部 VS Code 兼容版本的 4 位补丁号（可用 VERSION_TIME_PATCH 环境变量）
+  --request-id     门户请求 UUID；写入 workflow run-name
+  --output         text 或 json；json 输出固定 schema v1
   --dry-run       仅显示将要执行的命令，不实际执行
   --help          显示帮助信息
 
@@ -191,6 +195,14 @@ while [[ $# -gt 0 ]]; do
             VERSION_TIME_PATCH="$2"
             shift 2
             ;;
+        --request-id)
+            REQUEST_ID="$2"
+            shift 2
+            ;;
+        --output)
+            OUTPUT_FORMAT="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -209,6 +221,14 @@ done
 
 if [[ "${ZHANLU_BUNDLE_CODEX_RUNTIME}" != "0" && "${ZHANLU_BUNDLE_CODEX_RUNTIME}" != "1" ]]; then
     print_error "--bundle-codex-runtime 必须是 0 或 1"
+    exit 1
+fi
+if [[ "${OUTPUT_FORMAT}" != "text" && "${OUTPUT_FORMAT}" != "json" ]]; then
+    print_error "--output 必须是 text 或 json"
+    exit 1
+fi
+if [[ -n "${REQUEST_ID}" && ! "${REQUEST_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+    print_error "--request-id 格式不正确"
     exit 1
 fi
 
@@ -253,13 +273,28 @@ resolve_delivery_pin() {
     local metadata_dir
     local metadata=""
     local local_metadata="./.zhanlu/release-delivery.json"
+    local local_metadata_matches=false
     local repository_hint="${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-}"
     metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/zhanlu-release-metadata.XXXXXX")"
+
+    # Workflow-artifact builds do not use a GitHub Release. Resolve and validate
+    # the requested Profile directly so stale release metadata in the persistent
+    # worker checkout can never affect generate-only dispatches.
+    if [[ "${GENERATE_ONLY}" == true ]]; then
+        prepare_release_delivery_profile "${SOURCE_BRANCH}" "${DELIVERY_PROFILE}" "${REPO}"
+        rm -rf "${metadata_dir}"
+        print_info "定向交付 Profile: ${DELIVERY_PROFILE}"
+        print_info "zhanlu-code 固定提交: ${ZHANLU_DELIVERY_SOURCE_COMMIT}"
+        print_info "Profile 摘要: ${ZHANLU_DELIVERY_PROFILE_DIGEST}"
+        print_info "Release 制品仓库: ${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
+        return
+    fi
 
     if [[ -f "${local_metadata}" ]] && \
         [[ "$(jq -r '.releaseVersion // empty' "${local_metadata}")" == "${RELEASE_VERSION}" ]] && \
         [[ "$(jq -r '.deliveryProfile // empty' "${local_metadata}")" == "${DELIVERY_PROFILE}" ]] && \
         [[ "$(jq -r '.sourceRef // empty' "${local_metadata}")" == "${SOURCE_BRANCH}" ]]; then
+        local_metadata_matches=true
         repository_hint="$(jq -r '.assetsRepository' "${local_metadata}")"
     fi
     if [[ -z "${repository_hint}" && "${DELIVERY_PROFILE}" == "default" ]]; then
@@ -271,7 +306,8 @@ resolve_delivery_pin() {
         --pattern zhanlu-delivery.json \
         --dir "${metadata_dir}" >/dev/null 2>&1; then
         metadata="${metadata_dir}/zhanlu-delivery.json"
-    elif [[ -f "${local_metadata}" && "${repository_hint}" == "$(jq -r '.assetsRepository // empty' "${local_metadata}")" ]]; then
+    elif [[ "${local_metadata_matches}" == true ]] && \
+        [[ "${repository_hint}" == "$(jq -r '.assetsRepository // empty' "${local_metadata}")" ]]; then
         metadata="${local_metadata}"
     fi
 
@@ -470,6 +506,9 @@ trigger_workflow() {
     wf_fields+=(-f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}")
     wf_fields+=(-f "release_version=${RELEASE_VERSION}")
     wf_fields+=(-f "bundle_codex_runtime=${ZHANLU_BUNDLE_CODEX_RUNTIME}")
+    if [[ -n "${REQUEST_ID}" ]]; then
+        wf_fields+=(-f "portal_request_id=${REQUEST_ID}")
+    fi
     print_info "Codex runtime bundle: ${ZHANLU_BUNDLE_CODEX_RUNTIME}"
     if [[ -n "${VERSION_TIME_PATCH}" ]]; then
         wf_fields+=(-f "version_time_patch=${VERSION_TIME_PATCH}")
@@ -491,13 +530,39 @@ trigger_workflow() {
     fi
     # zhanlu_change end
 
+    local runs_json="[]"
     for workflow in "${workflows[@]}"; do
         print_info "触发工作流: $workflow"
         if [[ "$DRY_RUN" == true ]]; then
             echo -e "${YELLOW}[DRY-RUN]${NC} gh workflow run ${workflow} --ref ${WORKFLOW_REF} ${wf_fields[*]}"
         else
-            print_info "执行: gh workflow run ${workflow} --ref ${WORKFLOW_REF} …"
-            gh workflow run "${workflow}" --ref "${WORKFLOW_REF}" "${wf_fields[@]}"
+            print_info "执行: GitHub workflow dispatch API ${workflow} --ref ${WORKFLOW_REF} …"
+            local payload response
+            payload="$(python3 - "${WORKFLOW_REF}" "${wf_fields[@]}" <<'PY'
+import json, sys
+inputs = {}
+args = sys.argv[2:]
+for index in range(0, len(args), 2):
+    value = args[index + 1]
+    if value.startswith("="):
+        value = value[1:]
+    inputs[value.split("=", 1)[0] if "=" in value else value] = value.split("=", 1)[1] if "=" in value else ""
+print(json.dumps({"ref": sys.argv[1], "inputs": inputs}))
+PY
+)"
+            response="$(gh api "repos/${REPO}/actions/workflows/${workflow}/dispatches" \
+                --method POST \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                --input - <<<"${payload}")"
+            local run_id run_url
+            run_id="$(jq -r '.workflow_run_id // .workflow_run.id // empty' <<<"${response}")"
+            run_url="$(jq -r '.html_url // .workflow_run.html_url // .url // empty' <<<"${response}")"
+            if [[ -z "${run_id}" || -z "${run_url}" ]]; then
+                print_error "GitHub dispatch 未返回 ${workflow} 的 run ID/URL；拒绝猜测归属"
+                exit 1
+            fi
+            runs_json="$(jq -c --arg workflow "${workflow}" --argjson runId "${run_id}" --arg url "${run_url}" '. + [{workflow: $workflow, runId: $runId, url: $url}]' <<<"${runs_json}")"
         fi
 
         if [[ "$DRY_RUN" != true ]]; then
@@ -507,6 +572,10 @@ trigger_workflow() {
 
     if [[ "$DRY_RUN" != true ]]; then
         print_info "查看进度: https://github.com/${REPO}/actions"
+        if [[ "${OUTPUT_FORMAT}" == "json" ]]; then
+            jq -cn --arg requestId "${REQUEST_ID}" --argjson runs "${runs_json}" \
+                '{schemaVersion:"v1",requestId:($requestId|select(length>0)),runs:$runs}'
+        fi
     fi
 }
 

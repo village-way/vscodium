@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: postgres-data }
+spec: { accessModes: [ReadWriteOnce], storageClassName: zhanlu-build-nfs-storage, resources: { requests: { storage: 20Gi } } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: worker-data }
+spec: { accessModes: [ReadWriteOnce], storageClassName: zhanlu-build-nfs-storage, resources: { requests: { storage: 50Gi } } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: postgres-backup }
+spec: { accessModes: [ReadWriteOnce], storageClassName: zhanlu-build-nfs-storage, resources: { requests: { storage: 20Gi } } }

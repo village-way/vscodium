@@ -3,6 +3,9 @@ name: stable-windows
 on:
   workflow_dispatch:
     inputs:
+      portal_request_id:
+        type: string
+        description: Build Portal request id (optional)
       force_version:
         type: boolean
         description: Force update version
@@ -59,6 +62,8 @@ on:
         description: Internal 4-digit VS Code compatibility patch (optional)
   repository_dispatch:
     types: [stable]
+
+run-name: stable-windows · ${{ inputs.release_version || github.event.client_payload.release_version || 'auto' }} · ${{ inputs.portal_request_id || github.event.client_payload.portal_request_id || github.run_id }}
 
 env:
   GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }} # zhanlu_change - wrapper checkout follows the triggering ref

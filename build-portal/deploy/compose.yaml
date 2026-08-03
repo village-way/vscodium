@@ -1,0 +1,49 @@
+services:
+  postgres:
+    platform: linux/amd64
+    image: postgres:16.10-bookworm
+    environment:
+      POSTGRES_DB: zhanlu_build
+      POSTGRES_USER: zhanlu_build
+      POSTGRES_PASSWORD: local-only-password
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U zhanlu_build"], interval: 5s, timeout: 3s, retries: 20 }
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+  migrate:
+    platform: linux/amd64
+    build: { context: .., dockerfile: deploy/docker/Dockerfile.web }
+    command: ["node", "/tools/db/dist/migrate.js"]
+    environment: &environment
+      DATABASE_URL: postgresql://zhanlu_build:local-only-password@postgres/zhanlu_build
+      PUBLIC_ORIGIN: https://localhost:30443
+      CONFIRMATION_SECRET: local-confirmation-secret-change-me
+      IP_HASH_SECRET: local-ip-secret-change-me
+      CSRF_HMAC_SECRET: local-csrf-secret-change-me
+    depends_on: { postgres: { condition: service_healthy } }
+  web:
+    platform: linux/amd64
+    build: { context: .., dockerfile: deploy/docker/Dockerfile.web }
+    environment: *environment
+    ports: ["3000:3000"]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+  scheduler:
+    platform: linux/amd64
+    build: { context: .., dockerfile: deploy/docker/Dockerfile.web }
+    command: ["node", "/scheduler/dist/index.js"]
+    environment: *environment
+    depends_on: { migrate: { condition: service_completed_successfully } }
+  worker:
+    platform: linux/amd64
+    build: { context: .., dockerfile: deploy/docker/Dockerfile.worker }
+    environment:
+      <<: *environment
+      EXECUTOR_MODE: mock
+    depends_on: { migrate: { condition: service_completed_successfully } }
+  caddy:
+    image: caddy:2.10.2-alpine
+    ports: ["30443:8443"]
+    volumes: ["./compose/Caddyfile:/etc/caddy/Caddyfile:ro", "caddy-data:/data", "caddy-config:/config"]
+    depends_on: { web: { condition: service_started } }
+volumes:
+  postgres-data: {}
+  caddy-data: {}
+  caddy-config: {}
