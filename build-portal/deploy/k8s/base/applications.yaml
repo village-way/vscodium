@@ -92,6 +92,9 @@ spec:
             - { name: ZHANLU_SYNC_EXTERNAL_TMP_ROOT, value: /var/lib/zhanlu-build/git-sync/tmp }
             - { name: ZHANLU_SYNC_EXTERNAL_CACHE_ROOT, value: /var/lib/zhanlu-build/git-sync/cache }
             - { name: ZHANLU_SYNC_LOCK_ROOT, value: /var/lib/zhanlu-build/git-sync/lock }
+            # The worker PVC is declared by this Deployment; the base image's
+            # mount-format probe is not portable across util-linux versions.
+            - { name: ZHANLU_SYNC_SKIP_MOUNT_CHECK, value: "1" }
             # The dedicated NAS export maps all files to its service uid;
             # this isolated workspace is explicitly trusted by Git.
             - { name: GIT_CONFIG_COUNT, value: "3" }
