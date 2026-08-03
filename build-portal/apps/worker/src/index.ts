@@ -61,14 +61,31 @@ async function dispatch(build: BuildRow, spec: BuildSpec): Promise<void> {
 
 async function monitor(build: BuildRow): Promise<void> {
   const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPOSITORY_NAME ?? "vscodium"; if (!owner) throw new Error("GITHUB_OWNER is required"); const client = await github();
-  while (true) { const cancellation = await getPool().query<{cancel_requested_at:Date|null}>("SELECT cancel_requested_at FROM builds WHERE id=$1",[build.id]); const runs = await getPool().query<{id:string;run_id:string;status:string}>("SELECT id,run_id,status FROM build_runs WHERE build_id=$1",[build.id]); let complete=0; let success=true;
-    for (const item of runs.rows) { if (cancellation.rows[0]?.cancel_requested_at && item.status !== "completed") await client.actions.cancelWorkflowRun({owner,repo,run_id:Number(item.run_id)}).catch(() => undefined); const detail = await client.actions.getWorkflowRun({owner,repo,run_id:Number(item.run_id)}); const status=detail.data.status ?? "unknown"; const conclusion=detail.data.conclusion; await getPool().query("UPDATE build_runs SET status=$2,conclusion=$3,run_url=$4,updated_at=now() WHERE id=$1",[item.id,status,conclusion,detail.data.html_url]); if(status==="completed"){complete++; if(conclusion!=="success")success=false;} }
-    if (complete===runs.rowCount && runs.rowCount>0) { await setPhase(build.id,cancellation.rows[0]?.cancel_requested_at?"cancelled":success?"succeeded":"failed"); return; }
+  while (true) { const cancellation = await getPool().query<{cancel_requested_at:Date|null}>("SELECT cancel_requested_at FROM builds WHERE id=$1",[build.id]); const runs = await getPool().query<{id:string;run_id:string;status:string}>("SELECT id,run_id,status FROM build_runs WHERE build_id=$1",[build.id]); let complete=0; let success=true; const failedJobs: string[] = [];
+    for (const item of runs.rows) {
+      if (cancellation.rows[0]?.cancel_requested_at && item.status !== "completed") await client.actions.cancelWorkflowRun({owner,repo,run_id:Number(item.run_id)}).catch(() => undefined);
+      const detail = await client.actions.getWorkflowRun({owner,repo,run_id:Number(item.run_id)});
+      const status=detail.data.status ?? "unknown"; const conclusion=detail.data.conclusion;
+      let failed: string[] = [];
+      if (status === "completed" && conclusion !== "success") {
+        try {
+          const jobs = await client.actions.listJobsForWorkflowRun({ owner, repo, run_id: Number(item.run_id), per_page: 100 });
+          failed = jobs.data.jobs.filter((job) => job.conclusion && !["success", "skipped", "neutral"].includes(job.conclusion)).map((job) => job.name);
+        } catch (error) {
+          await setPhase(build.id, "needs_attention", `unable to inspect failed jobs: ${error instanceof Error ? error.message : "unknown"}`);
+          return;
+        }
+      }
+      await getPool().query("UPDATE build_runs SET status=$2,conclusion=$3,run_url=$4,failed_jobs=$5::jsonb,updated_at=now() WHERE id=$1",[item.id,status,conclusion,detail.data.html_url,JSON.stringify(failed)]);
+      failedJobs.push(...failed.map((name) => `${item.run_id}:${name}`));
+      if(status==="completed"){complete++; if(conclusion!=="success")success=false;}
+    }
+    if (complete===runs.rowCount && runs.rowCount>0) { await setPhase(build.id,cancellation.rows[0]?.cancel_requested_at?"cancelled":success?"succeeded":"failed", success ? undefined : `failed jobs: ${failedJobs.join(", ") || "unknown"}`); return; }
     await getPool().query("UPDATE builds SET lease_expires_at=now()+interval '90 seconds' WHERE id=$1",[build.id]); await new Promise((resolve)=>setTimeout(resolve,30_000));
   }
 }
 
-async function processBuild(build: BuildRow): Promise<void> { const spec=buildSpecSchema.parse(build.spec); if(build.phase==="running"){await monitor(build);return;} let lock:pg.PoolClient|undefined; try { lock=await acquirePrepareLock(); if(build.phase!=="dispatching")await prepareWorkspace(spec);const resolved=build.resolved ?? {...resolveReleaseVersion(spec),platforms:selectedPlatforms(spec)};await getPool().query("UPDATE builds SET resolved=$2::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved)]);if(build.phase==="queued")await setPhase(build.id,"source_sync_preview");await dispatch(build,spec); await setPhase(build.id,"running"); } catch(error) { await setPhase(build.id,error instanceof Error&&error.message.includes("ambiguous")?"needs_attention":"failed",error instanceof Error?error.message:"unknown"); return; } finally { if(lock) await releasePrepareLock(lock); } await monitor(build); }
+async function processBuild(build: BuildRow): Promise<void> { const parsed=buildSpecSchema.parse(build.spec); if(build.phase==="running"){await monitor(build);return;} let lock:pg.PoolClient|undefined; try { lock=await acquirePrepareLock(); if(build.phase!=="dispatching")await prepareWorkspace(parsed);const resolved=build.resolved ?? {...resolveReleaseVersion(parsed),platforms:selectedPlatforms(parsed)};const spec=parsed.timePatch?parsed:{...parsed,timePatch:String(resolved.timePatch)};await getPool().query("UPDATE builds SET resolved=$2::jsonb,spec=$3::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved),JSON.stringify(spec)]);if(build.phase==="queued")await setPhase(build.id,"source_sync_preview");await dispatch(build,spec); await setPhase(build.id,"running"); } catch(error) { await setPhase(build.id,error instanceof Error&&error.message.includes("ambiguous")?"needs_attention":"failed",error instanceof Error?error.message:"unknown"); return; } finally { if(lock) await releasePrepareLock(lock); } await monitor(build); }
 
 async function processMockBuild(build: BuildRow): Promise<void>{const spec=buildSpecSchema.parse(build.spec);const resolved=build.resolved??{...resolveReleaseVersion(spec),platforms:selectedPlatforms(spec)};await setPhase(build.id,"preflight");await getPool().query("UPDATE builds SET resolved=$2::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved)]);await setPhase(build.id,"dispatching");for(const platform of selectedPlatforms(spec))await getPool().query("INSERT INTO build_runs(build_id,platform,workflow,run_id,run_url,status,conclusion,dispatch_attempts) VALUES($1,$2,$3,$4,$5,'completed','success',1) ON CONFLICT(build_id,platform) DO UPDATE SET status='completed',conclusion='success',updated_at=now()",[build.id,platform,workflowByPlatform[platform],`mock-${build.request_id}-${platform}`,`https://example.invalid/mock/${build.request_id}/${platform}`]);await setPhase(build.id,"succeeded","mock executor");}
 

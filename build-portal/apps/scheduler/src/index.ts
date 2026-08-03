@@ -1,6 +1,6 @@
 import { CronExpressionParser } from "cron-parser";
 import { getPool, closePool, withTransaction } from "@zhanlu/build-portal-db";
-import { scheduleInputSchema } from "@zhanlu/build-portal-contracts";
+import { resolveReleaseVersion, scheduleInputSchema } from "@zhanlu/build-portal-contracts";
 
 const SCAN_MS = 30_000; const CATCH_UP_MS = 15 * 60_000; const LOCK_ID = 0x5a48414e;
 let firstScan = true;
@@ -15,6 +15,12 @@ export async function scan(now = new Date()): Promise<number> {
       const previous = CronExpressionParser.parse(value.cron, { currentDate: now, tz: value.timezone }).prev().toDate();
       const age = now.getTime() - previous.getTime();
       if (age < 0 || age > (firstScan ? CATCH_UP_MS : SCAN_MS + 5_000)) continue;
+      const resolvedVersion = resolveReleaseVersion(value.spec, now);
+      const scheduledSpec = value.spec.timePatch ? value.spec : { ...value.spec, timePatch: resolvedVersion.timePatch };
+      const resolved = {
+        ...resolveReleaseVersion(scheduledSpec, now),
+        platforms: scheduledSpec.platform === "all" ? ["macos", "linux", "windows"] : [scheduledSpec.platform],
+      };
       // Keep the occurrence/build link explicit.  The previous data-modifying
       // CTE could insert both rows but leave build_id NULL on PostgreSQL 16,
       // orphaning the scheduler occurrence from the queued build.
@@ -25,9 +31,9 @@ export async function scan(now = new Date()): Promise<number> {
       );
       if (!occurrence.rows[0]) continue;
       const build = await client.query<{ id: string }>(
-        `INSERT INTO builds(spec,phase,confirmed_at)
-         VALUES($1::jsonb,'queued',now()) RETURNING id`,
-        [JSON.stringify(value.spec)],
+        `INSERT INTO builds(spec,resolved,phase,confirmed_at)
+         VALUES($1::jsonb,$2::jsonb,'queued',now()) RETURNING id`,
+        [JSON.stringify(scheduledSpec), JSON.stringify(resolved)],
       );
       const buildId = build.rows[0]?.id;
       if (!buildId) throw new Error("scheduler build insert returned no id");
