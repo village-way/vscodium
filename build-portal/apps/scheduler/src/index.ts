@@ -15,13 +15,27 @@ export async function scan(now = new Date()): Promise<number> {
       const previous = CronExpressionParser.parse(value.cron, { currentDate: now, tz: value.timezone }).prev().toDate();
       const age = now.getTime() - previous.getTime();
       if (age < 0 || age > (firstScan ? CATCH_UP_MS : SCAN_MS + 5_000)) continue;
-      const result = await client.query(
-        `WITH occurrence AS (INSERT INTO schedule_occurrences(schedule_id,scheduled_for) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id),
-         build AS (INSERT INTO builds(spec,phase,confirmed_at) SELECT $3::jsonb,'queued',now() FROM occurrence RETURNING id)
-         UPDATE schedule_occurrences o SET build_id=b.id FROM occurrence x,build b WHERE o.id=x.id RETURNING o.id`,
-        [row.id, previous, JSON.stringify(value.spec)],
+      // Keep the occurrence/build link explicit.  The previous data-modifying
+      // CTE could insert both rows but leave build_id NULL on PostgreSQL 16,
+      // orphaning the scheduler occurrence from the queued build.
+      const occurrence = await client.query<{ id: string }>(
+        `INSERT INTO schedule_occurrences(schedule_id,scheduled_for)
+         VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id`,
+        [row.id, previous],
       );
-      created += result.rowCount ?? 0;
+      if (!occurrence.rows[0]) continue;
+      const build = await client.query<{ id: string }>(
+        `INSERT INTO builds(spec,phase,confirmed_at)
+         VALUES($1::jsonb,'queued',now()) RETURNING id`,
+        [JSON.stringify(value.spec)],
+      );
+      const buildId = build.rows[0]?.id;
+      if (!buildId) throw new Error("scheduler build insert returned no id");
+      await client.query(
+        `UPDATE schedule_occurrences SET build_id=$2,status='queued' WHERE id=$1`,
+        [occurrence.rows[0].id, buildId],
+      );
+      created += 1;
     }
     firstScan = false; return created;
   });
