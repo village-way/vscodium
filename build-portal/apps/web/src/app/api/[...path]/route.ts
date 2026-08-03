@@ -8,6 +8,7 @@ import { CronExpressionParser } from "cron-parser";
 export const runtime = "nodejs";
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "cache-control": "no-store" } });
 const clientIp = (request: NextRequest) => request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+const buildRefRepositories = ["zhanlu-code", "zhanlu-core", "zhanlu-vs"] as const;
 const nextRunAt = (cron: string, timezone: string): string | null => {
   try { return CronExpressionParser.parse(cron, { currentDate: new Date(), tz: timezone }).next().toDate().toISOString(); } catch { return null; }
 };
@@ -29,10 +30,10 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
   if (method !== "GET") { if (!verifyOrigin(request.headers.get("origin")) || !verifyCsrf(session, request.headers.get("x-csrf-token") ?? undefined)) throw new HttpError("CSRF validation failed", 403); }
   if (route === "auth/logout" && method === "POST") { await logout(session.sessionId); const response = json({ ok: true }); response.headers.set("set-cookie", sessionCookie("", true)); return response; }
 
-  if (route === "refs" && method === "GET") { const result = await getPool().query("SELECT DISTINCT ON(repository,provider,ref) repository,provider,ref,sha,sync_status,captured_at FROM ref_snapshots ORDER BY repository,provider,ref,captured_at DESC"); return json({ refs: result.rows }); }
+  if (route === "refs" && method === "GET") { const result = await getPool().query("SELECT DISTINCT ON(repository,provider,ref) repository,provider,ref,sha,sync_status,captured_at FROM ref_snapshots WHERE repository = ANY($1::text[]) ORDER BY repository,provider,ref,captured_at DESC", [buildRefRepositories]); return json({ refs: result.rows }); }
   if (route === "refs/refresh" && method === "POST") { await audit(session.userId, "refs.refresh.requested", "refs", null, ipHash(clientIp(request))); return json({ accepted: true }, 202); }
   if (route === "build-previews" && method === "POST") {
-    const spec = buildSpecSchema.parse(await body(request)); if(spec.triggerOnly)throw new HttpError("triggerOnly is reserved for failed/cancelled platform retry",400);const requestId = randomUUID(); const resolvedVersion = resolveReleaseVersion(spec); const snapshot = await getPool().query("SELECT DISTINCT ON(repository,provider,ref) repository,provider,ref,sha,sync_status,captured_at FROM ref_snapshots ORDER BY repository,provider,ref,captured_at DESC");
+    const spec = buildSpecSchema.parse(await body(request)); if(spec.triggerOnly)throw new HttpError("triggerOnly is reserved for failed/cancelled platform retry",400);const requestId = randomUUID(); const resolvedVersion = resolveReleaseVersion(spec); const snapshot = await getPool().query("SELECT DISTINCT ON(repository,provider,ref) repository,provider,ref,sha,sync_status,captured_at FROM ref_snapshots WHERE repository = ANY($1::text[]) ORDER BY repository,provider,ref,captured_at DESC", [buildRefRepositories]);
     const resolved = { ...resolvedVersion, refs: { sourceBranch: spec.sourceBranch, zhanluCoreRef: spec.zhanluCoreRef, zhanluVsRef: spec.zhanluVsRef }, deliveryProfile: spec.deliveryProfile, platforms: spec.platform === "all" ? ["macos","linux","windows"] : [spec.platform], syncScope: [spec.sourceBranch,spec.zhanluCoreRef,spec.zhanluVsRef].some((ref) => ref !== "develop") ? "all-refs" : "default-branches", githubVisibility: spec.publish ? "published" : "draft", syncGitLab: spec.kind === "formal" && spec.syncGitLab, refSnapshot: snapshot.rows };
     const hash = confirmationHash({ spec, resolved }, process.env.CONFIRMATION_SECRET ?? ""); if (!process.env.CONFIRMATION_SECRET) throw new Error("CONFIRMATION_SECRET is required");
     const inserted = await getPool().query("INSERT INTO builds(request_id,spec,resolved,confirmation_hash,phase,requested_by) VALUES($1,$2::jsonb,$3::jsonb,$4,'awaiting_confirmation',$5) RETURNING *", [requestId, JSON.stringify(spec), JSON.stringify(resolved), hash, session.userId]);

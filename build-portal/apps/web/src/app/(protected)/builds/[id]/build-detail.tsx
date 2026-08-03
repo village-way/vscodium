@@ -30,7 +30,7 @@ export function BuildDetail() {
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => { if (!detail || terminal.has(detail.build.phase)) return; const timer = window.setInterval(() => void refresh(), 10_000); return () => window.clearInterval(timer); }, [detail, refresh]);
 
-  const snapshot = useMemo(() => Array.isArray(detail?.build.resolved?.refSnapshot) ? detail?.build.resolved?.refSnapshot as Snapshot[] : [], [detail]);
+  const snapshot = useMemo(() => Array.isArray(detail?.build.resolved?.refSnapshot) ? (detail?.build.resolved?.refSnapshot as Snapshot[]).filter((item) => ["zhanlu-code", "zhanlu-core", "zhanlu-vs"].includes(item.repository)) : [], [detail]);
   if (!detail) return <main className="detail-page"><div className="loading-state">正在加载构建详情…</div></main>;
   const { build, runs, events } = detail;
   const spec = build.spec;
