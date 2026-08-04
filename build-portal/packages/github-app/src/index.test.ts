@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installationToken } from "./index.js";
+import { gitCredentialToken, installationToken } from "./index.js";
 
 test("installation token broker fails closed without app configuration", async () => {
   const saved = { app: process.env.GITHUB_APP_ID, installation: process.env.GITHUB_APP_INSTALLATION_ID };
@@ -9,4 +9,12 @@ test("installation token broker fails closed without app configuration", async (
   await assert.rejects(() => installationToken(), /GITHUB_APP_ID and GITHUB_APP_INSTALLATION_ID are required/);
   if (saved.app) process.env.GITHUB_APP_ID = saved.app;
   if (saved.installation) process.env.GITHUB_APP_INSTALLATION_ID = saved.installation;
+});
+
+test("git credential token can use a workflow-capable token", async () => {
+  const saved = process.env.GITHUB_GIT_TOKEN;
+  process.env.GITHUB_GIT_TOKEN = "workflow-capable-token";
+  assert.equal(await gitCredentialToken(), "workflow-capable-token");
+  if (saved) process.env.GITHUB_GIT_TOKEN = saved;
+  else delete process.env.GITHUB_GIT_TOKEN;
 });

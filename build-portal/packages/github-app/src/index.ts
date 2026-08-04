@@ -25,6 +25,10 @@ export async function installationToken(): Promise<string> {
 
 export async function github(): Promise<Octokit> { return new Octokit({ auth: await installationToken() }); }
 
+export async function gitCredentialToken(): Promise<string> {
+  return process.env.GITHUB_GIT_TOKEN || installationToken();
+}
+
 export async function assertRepositoryAccess(repositories: string[]): Promise<void> {
   const client = await github();
   const installed = await client.paginate(client.apps.listReposAccessibleToInstallation, { per_page: 100 });
@@ -36,7 +40,7 @@ export async function assertRepositoryAccess(repositories: string[]): Promise<vo
 export async function startCredentialBroker(socketPath = process.env.GITHUB_CREDENTIAL_SOCKET ?? "/run/zhanlu-credentials/github.sock"): Promise<Server> {
   await unlink(socketPath).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
   const server = createServer(async (socket) => {
-    try { socket.end(`${await installationToken()}\n`); }
+    try { socket.end(`${await gitCredentialToken()}\n`); }
     catch { socket.end(); }
   });
   await new Promise<void>((resolve, reject) => server.listen(socketPath, resolve).once("error", reject));
