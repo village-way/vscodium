@@ -57,6 +57,8 @@ nav a:hover, nav a.active { background: rgb(65 199 162 / 11%); color: var(--acce
 .form-panel { min-height: 100%; }
 .step-label { color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .1em; white-space: nowrap; }
 .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ref-field small { line-height: 1.4; }
+.info-note { grid-column: 1 / -1; border: 1px solid var(--line-soft); border-radius: 9px; background: rgb(8 16 24 / 35%); color: var(--muted); padding: 10px 12px; }
 label { display: grid; gap: 7px; color: var(--muted); font-weight: 620; }
 .checkbox-label { display: flex; align-items: center; gap: 9px; color: var(--text); font-weight: 500; }
 .checkbox-label input { width: 17px; height: 17px; accent-color: var(--accent); }
@@ -69,6 +71,8 @@ label { display: grid; gap: 7px; color: var(--muted); font-weight: 620; }
 .ref-panel { display: grid; gap: 18px; }
 .ref-panel .panel-heading { align-items: start; }
 .ref-group { border-top: 1px solid var(--line-soft); padding-top: 14px; }
+.ref-group-title > div { display: grid; gap: 2px; }
+.ref-group-title small { color: var(--muted); font-size: 12px; font-weight: 500; }
 .ref-group-title, .ref-row, .snapshot-row { display: flex; align-items: center; gap: 10px; }
 .ref-group-title { justify-content: space-between; margin-bottom: 8px; }
 .ref-group-title span, .ref-meta { color: var(--muted); font-size: 12px; }

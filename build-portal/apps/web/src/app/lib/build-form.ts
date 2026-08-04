@@ -1,6 +1,7 @@
-export type BuildFormValues = { kind: "development" | "formal"; version: string; platform: string; outputMode: string; sourceBranch: string; deliveryProfile: string; zhanluCoreRef: string; zhanluVsRef: string; bundleCodexRuntime: boolean; syncGitLab: boolean; publish: boolean };
+export type BuildFormValues = { kind: "development" | "formal"; version: string; platform: string; outputMode: string; zhanluCodeRef: string; deliveryProfile: string; zhanluCoreRef: string; zhanluVsRef: string; bundleCodexRuntime: boolean; syncGitLab: boolean; publish: boolean };
 
 export function normalizeBuildForm(values: BuildFormValues) {
   const formal = values.kind === "formal";
-  return { ...values, outputMode: formal ? "release" : values.outputMode, syncGitLab: formal && values.syncGitLab, publish: formal && values.publish, triggerOnly: false };
+  const { zhanluCodeRef, ...rest } = values;
+  return { ...rest, sourceBranch: zhanluCodeRef.trim(), zhanluCoreRef: values.zhanluCoreRef.trim(), zhanluVsRef: values.zhanluVsRef.trim(), outputMode: formal ? "release" : values.outputMode, syncGitLab: formal && values.syncGitLab, publish: formal && values.publish, triggerOnly: false };
 }

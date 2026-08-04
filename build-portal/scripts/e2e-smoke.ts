@@ -23,6 +23,13 @@ async function main(): Promise<void> {
 const redirect = await request("/", { redirect: "manual" });
 assert.ok([301, 302, 307, 308].includes(redirect.status), `unauthenticated root should redirect, got ${redirect.status}`);
 assert.match(redirect.headers.get("location") ?? "", /\/login\?next=/);
+const loginPage = await request("/login");
+assert.equal(loginPage.status, 200);
+const loginHtml = await loginPage.text();
+assert.match(loginHtml, /<h1>构建门户<\/h1>/);
+assert.match(loginHtml, /Stable Release/);
+assert.match(loginHtml, /Session 有效期 12 小时/);
+assert.doesNotMatch(loginHtml, /湛卢构建门户|Zhanlu Stable Release|连接地址仅供内网使用/);
 assert.equal((await request("/api/metrics")).status, 401);
 
 const login = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify({ username, password }) });
@@ -40,10 +47,13 @@ assert.doesNotMatch(rootHtml, /管理员登录/);
 
 const csrf = loginValue.csrfToken as string;
 const headers = { "content-type": "application/json", "x-csrf-token": csrf, origin: base };
-const preview = await request("/api/build-previews", { method: "POST", headers, body: JSON.stringify({ kind: "development", version: "1.4.1", platform: "linux", sourceBranch: "develop", deliveryProfile: "default", zhanluCoreRef: "develop", zhanluVsRef: "develop", bundleCodexRuntime: false, outputMode: "workflow-artifact", triggerOnly: false, syncGitLab: false, publish: false }) }, cookie);
+const preview = await request("/api/build-previews", { method: "POST", headers, body: JSON.stringify({ kind: "development", version: "1.4.1", platform: "linux", sourceBranch: "feature/release", deliveryProfile: "default", zhanluCoreRef: "refs/tags/v1.4.1", zhanluVsRef: "A".repeat(40), bundleCodexRuntime: false, outputMode: "workflow-artifact", triggerOnly: false, syncGitLab: false, publish: false }) }, cookie);
 assert.equal(preview.status, 201);
 const previewValue = await preview.json() as Json;
 const build = previewValue.build as Json;
+assert.equal(build.spec.sourceBranch, "feature/release");
+assert.equal(build.spec.zhanluCoreRef, "v1.4.1");
+assert.equal(build.spec.zhanluVsRef, "a".repeat(40));
 const detailPage = await request(`/builds/${build.id}`, {}, cookie);
 assert.equal(detailPage.status, 200);
 await detailPage.text();

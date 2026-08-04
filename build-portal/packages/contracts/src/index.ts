@@ -8,15 +8,44 @@ export const buildPhases = [
   "dispatching", "running", "succeeded", "failed", "cancelled", "needs_attention",
 ] as const;
 
+const fullCommitPattern = /^[0-9a-f]{40}$/i;
+const safeRefPattern = /^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,199}$/;
+
+function canonicalBuildRef(value: string): string {
+  const trimmed = value.trim();
+  const standardPrefix = trimmed.match(/^refs\/(?:heads|tags)\/(.+)$/);
+  const canonical = standardPrefix?.[1] ?? trimmed;
+  return fullCommitPattern.test(canonical) ? canonical.toLowerCase() : canonical;
+}
+
+function isValidBuildRef(value: string): boolean {
+  const canonical = canonicalBuildRef(value);
+  if (fullCommitPattern.test(canonical)) return true;
+  return safeRefPattern.test(canonical)
+    && !canonical.includes("..")
+    && !canonical.includes("@{")
+    && !canonical.includes("//")
+    && !canonical.endsWith("/")
+    && !canonical.endsWith(".");
+}
+
+export const buildRefSchema = z.string()
+  .trim()
+  .min(1, "源码引用不能为空")
+  .max(200, "源码引用不能超过 200 个字符")
+  .refine(isValidBuildRef, "请输入合法的 branch、tag、ref 或完整 40 位 commit SHA")
+  .transform(canonicalBuildRef);
+
 const rawBuildSpecSchema = z.object({
   kind: z.enum(["development", "formal"]),
   version: z.string().regex(/^v?\d+\.\d+\.\d+$/),
   timePatch: z.string().regex(/^\d{1,4}$/).optional(),
   platform: z.enum(platforms).default("all"),
-  sourceBranch: z.string().min(1).max(200).default("develop"),
+  // Kept as sourceBranch for workflow/API compatibility; this is the zhanlu-code ref.
+  sourceBranch: buildRefSchema.default("develop"),
   deliveryProfile: z.string().min(1).max(100).default("default"),
-  zhanluCoreRef: z.string().min(1).max(200).default("develop"),
-  zhanluVsRef: z.string().min(1).max(200).default("develop"),
+  zhanluCoreRef: buildRefSchema.default("develop"),
+  zhanluVsRef: buildRefSchema.default("develop"),
   bundleCodexRuntime: z.boolean().default(false),
   outputMode: z.enum(["release", "workflow-artifact"]).default("release"),
   triggerOnly: z.boolean().default(false),
