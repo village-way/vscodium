@@ -10,6 +10,7 @@ import { runRelease, type SourceRefs } from "@zhanlu/build-portal-release-runner
 import { decideRecovery } from "./recovery.js";
 import { configureReleaseGitIdentity } from "./git-identity.js";
 import { extractReleaseUrl } from "./release-url.js";
+import { summarizeRuns, type RunObservation } from "./run-status.js";
 
 const run = promisify(execFile); const WORKER_ID = process.env.WORKER_ID ?? hostname(); const VERSION = process.env.PORTAL_VERSION ?? "development"; const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/var/lib/zhanlu-build/workspace"; const PREPARE_LOCK = 0x5a4c524c; const POLL_MS = Number(process.env.WORKER_POLL_MS ?? 5000);
 const workflowByPlatform = { macos: "stable-macos.yml", linux: "stable-linux.yml", windows: "stable-windows.yml" } as const;
@@ -72,7 +73,7 @@ async function findRunsByRequest(build: BuildRow, platforms: Array<keyof typeof 
 
 async function dispatch(build: BuildRow, spec: BuildSpec): Promise<void> {
   const token=await installationToken();process.env.GH_TOKEN=token;process.env.GITHUB_TOKEN=token;
-  let persistedSourceRefs=sourceRefsFromResolved(build.resolved);let observed:BuildPhase|undefined;const log=async(line:string)=>{let phase:BuildPhase|undefined;if(line.includes("Previewing selected GitLab")||line.includes("Previewing GitLab"))phase="source_sync_preview";else if(line.includes("Synchronizing selected GitLab")||line.includes("Synchronizing GitLab"))phase="source_sync";else if(line.startsWith("Preflight"))phase="preflight";else if(line.includes("Creating/updating the release"))phase="release_prepare";else if(line.includes("Dispatching stable workflow"))phase="dispatching";if(phase&&phase!==observed){observed=phase;await setPhase(build.id,phase);}if(line.startsWith("{")){try{const value=JSON.parse(line) as {event?:string;sourceRefs?:SourceRefs};if(value.event==="source_refs_resolved"&&value.sourceRefs){persistedSourceRefs=value.sourceRefs;await persistSourceRefs(build.id,value.sourceRefs);}}catch{/* ordinary JSON log */}}const releaseUrl=extractReleaseUrl(line);if(releaseUrl)await getPool().query("UPDATE builds SET release_url=$2,updated_at=now() WHERE id=$1",[build.id,releaseUrl]);await appendBuildEvent(build.id,"runner.log",{line});};
+  let persistedSourceRefs=sourceRefsFromResolved(build.resolved);let observed:BuildPhase|undefined;const log=async(line:string)=>{let phase:BuildPhase|undefined;if(line.includes("Previewing selected GitLab")||line.includes("Previewing GitLab"))phase="source_sync_preview";else if(line.includes("Synchronizing selected GitLab")||line.includes("Synchronizing GitLab"))phase="source_sync";else if(line.startsWith("Preflight"))phase="preflight";else if(line.includes("Creating/updating the release"))phase="release_prepare";else if(line.includes("Dispatching stable workflow"))phase="dispatching";if(phase&&phase!==observed){observed=phase;await setPhase(build.id,phase);}if(line.startsWith("{")){try{const value=JSON.parse(line) as {event?:string;sourceRefs?:SourceRefs};if(value.event==="source_refs_resolved"&&value.sourceRefs){persistedSourceRefs=value.sourceRefs;await persistSourceRefs(build.id,value.sourceRefs);}}catch{/* ordinary JSON log */}}const releaseUrl=extractReleaseUrl(line);if(releaseUrl)await getPool().query("UPDATE builds SET release_url=$2,updated_at=now() WHERE id=$1",[build.id,releaseUrl]);};
   const existing = await getPool().query<{platform:string;run_id:string|null}>("SELECT platform,run_id FROM build_runs WHERE build_id=$1", [build.id]); const persisted=existing.rows.filter((row)=>row.run_id).map((row)=>row.platform);const selected=selectedPlatforms(spec);const initiallyMissing=selected.filter((platform)=>!persisted.includes(platform));const discovered:Record<string,number>={};
   if (["dispatching","running"].includes(build.phase)&&initiallyMissing.length) { const recovered = await findRunsByRequest(build, initiallyMissing); await saveRuns(build,recovered); for(const item of recovered){const platform=Object.entries(workflowByPlatform).find(([,workflow])=>workflow===item.workflow)?.[0];if(platform)discovered[platform]=1;} }
   const decision=decideRecovery({phase:build.phase,selected,persisted,discovered});if(decision.mode==="needs-attention")throw new Error(`ambiguous workflow attribution: ${decision.reason}`);if(decision.mode==="monitor")return;
@@ -83,26 +84,16 @@ async function dispatch(build: BuildRow, spec: BuildSpec): Promise<void> {
 
 async function monitor(build: BuildRow): Promise<void> {
   const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPOSITORY_NAME ?? "vscodium"; if (!owner) throw new Error("GITHUB_OWNER is required"); const client = await github();
-  while (true) { const cancellation = await getPool().query<{cancel_requested_at:Date|null}>("SELECT cancel_requested_at FROM builds WHERE id=$1",[build.id]); const runs = await getPool().query<{id:string;run_id:string;status:string}>("SELECT id,run_id,status FROM build_runs WHERE build_id=$1",[build.id]); let complete=0; let success=true; const failedJobs: string[] = [];
+  while (true) { const cancellation = await getPool().query<{cancel_requested_at:Date|null}>("SELECT cancel_requested_at FROM builds WHERE id=$1",[build.id]); const runs = await getPool().query<{id:string;platform:string;run_id:string;status:string}>("SELECT id,platform,run_id,status FROM build_runs WHERE build_id=$1",[build.id]); const observations: RunObservation[] = [];
     for (const item of runs.rows) {
       if (cancellation.rows[0]?.cancel_requested_at && item.status !== "completed") await client.actions.cancelWorkflowRun({owner,repo,run_id:Number(item.run_id)}).catch(() => undefined);
       const detail = await client.actions.getWorkflowRun({owner,repo,run_id:Number(item.run_id)});
       const status=detail.data.status ?? "unknown"; const conclusion=detail.data.conclusion;
-      let failed: string[] = [];
-      if (status === "completed" && conclusion !== "success") {
-        try {
-          const jobs = await client.actions.listJobsForWorkflowRun({ owner, repo, run_id: Number(item.run_id), per_page: 100 });
-          failed = jobs.data.jobs.filter((job) => job.conclusion && !["success", "skipped", "neutral"].includes(job.conclusion)).map((job) => job.name);
-        } catch (error) {
-          await setPhase(build.id, "needs_attention", `unable to inspect failed jobs: ${error instanceof Error ? error.message : "unknown"}`);
-          return;
-        }
-      }
-      await getPool().query("UPDATE build_runs SET status=$2,conclusion=$3,run_url=$4,failed_jobs=$5::jsonb,updated_at=now() WHERE id=$1",[item.id,status,conclusion,detail.data.html_url,JSON.stringify(failed)]);
-      failedJobs.push(...failed.map((name) => `${item.run_id}:${name}`));
-      if(status==="completed"){complete++; if(conclusion!=="success")success=false;}
+      await getPool().query("UPDATE build_runs SET status=$2,conclusion=$3,run_url=$4,updated_at=now() WHERE id=$1",[item.id,status,conclusion,detail.data.html_url]);
+      observations.push({ platform: item.platform, runId: item.run_id, status, conclusion: conclusion ?? null });
     }
-    if (complete===runs.rowCount && runs.rowCount>0) { await setPhase(build.id,cancellation.rows[0]?.cancel_requested_at?"cancelled":success?"succeeded":"failed", success ? undefined : `failed jobs: ${failedJobs.join(", ") || "unknown"}`); return; }
+    const summary = summarizeRuns(observations, Boolean(cancellation.rows[0]?.cancel_requested_at));
+    if (summary.terminalPhase) { await setPhase(build.id,summary.terminalPhase,summary.reason); return; }
     await getPool().query("UPDATE builds SET lease_expires_at=now()+interval '90 seconds' WHERE id=$1",[build.id]); await new Promise((resolve)=>setTimeout(resolve,30_000));
   }
 }

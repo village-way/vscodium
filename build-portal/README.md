@@ -1,6 +1,6 @@
 # 湛卢构建门户
 
-`build-portal` 是 vscodium 仓库内的 Stable 发布编排模块。它把预览确认、GitLab→GitHub 同步、Release/Profile 固定、三平台 GitHub Actions 触发、运行监控、失败平台重试和定时 development 构建集中到一个内网 HTTPS 门户；桌面制品仍由原生 workflow 构建。
+`build-portal` 是 vscodium 仓库内的 Stable 发布编排模块。它把预览确认、GitLab→GitHub 同步、Release/Profile 固定、三平台 GitHub Actions 触发、运行状态监控、失败平台重试和定时 development 构建集中到一个内网 HTTPS 门户；详细执行进度与构建日志直接在 GitHub Actions 查看，桌面制品仍由原生 workflow 构建。
 
 ## 组件
 

@@ -63,6 +63,7 @@ assert.equal(detail.status, 200);
 const detailValue = await detail.json() as Json;
 assert.equal(detailValue.build.id, build.id);
 assert.ok(detailValue.build.confirmation_hash);
+assert.equal("events" in detailValue, false);
 
 const confirmed = await request(`/api/builds/${build.id}/confirm`, { method: "POST", headers, body: JSON.stringify({ confirmationHash: build.confirmation_hash }) }, cookie);
 assert.equal(confirmed.status, 200);
@@ -75,6 +76,12 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
   if (phase === "succeeded") break;
 }
 assert.equal(phase, "succeeded", `mock build ended in ${phase}`);
+const completedDetail = await request(`/api/builds/${build.id}`, {}, cookie);
+assert.equal(completedDetail.status, 200);
+const completedDetailValue = await completedDetail.json() as Json;
+assert.ok(completedDetailValue.runs.length > 0);
+assert.ok(completedDetailValue.runs.every((item: Json) => !("failed_jobs" in item)));
+assert.ok(completedDetailValue.runs.every((item: Json) => typeof item.run_url === "string"));
 
 const schedule = await request("/api/schedules", { method: "POST", headers, body: JSON.stringify({ name: "e2e schedule", cron: "5 1 * * *", timezone: "Asia/Tokyo", enabled: true, spec: { kind: "development", version: "1.4.1", platform: "linux", sourceBranch: "develop", deliveryProfile: "default", zhanluCoreRef: "develop", zhanluVsRef: "develop", bundleCodexRuntime: false, outputMode: "workflow-artifact", triggerOnly: false, syncGitLab: false, publish: false } }) }, cookie);
 assert.equal(schedule.status, 201);
