@@ -19,9 +19,9 @@ test("confirmation hashes ignore object key order", () => {
 
 test("build refs accept branches, tags, standard refs, and exact commits", () => {
   assert.equal(buildRefSchema.parse(" feature/release "), "feature/release");
-  assert.equal(buildRefSchema.parse("refs/tags/v1.4.1"), "v1.4.1");
+  assert.equal(buildRefSchema.parse("refs/tags/v1.4.1"), "refs/tags/v1.4.1");
   assert.equal(buildRefSchema.parse("A".repeat(40)), "a".repeat(40));
-  assert.equal(buildSpecSchema.parse({ ...development, sourceBranch: "refs/heads/feature/release", zhanluCoreRef: "v1.4.1", zhanluVsRef: "b".repeat(40) }).sourceBranch, "feature/release");
+  assert.equal(buildSpecSchema.parse({ ...development, sourceBranch: "refs/heads/feature/release", zhanluCoreRef: "v1.4.1", zhanluVsRef: "b".repeat(40) }).sourceBranch, "refs/heads/feature/release");
 });
 
 test("build refs reject unsafe or ambiguous values", () => {

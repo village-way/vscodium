@@ -13,9 +13,7 @@ const safeRefPattern = /^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,199}$/;
 
 function canonicalBuildRef(value: string): string {
   const trimmed = value.trim();
-  const standardPrefix = trimmed.match(/^refs\/(?:heads|tags)\/(.+)$/);
-  const canonical = standardPrefix?.[1] ?? trimmed;
-  return fullCommitPattern.test(canonical) ? canonical.toLowerCase() : canonical;
+  return fullCommitPattern.test(trimmed) ? trimmed.toLowerCase() : trimmed;
 }
 
 function isValidBuildRef(value: string): boolean {

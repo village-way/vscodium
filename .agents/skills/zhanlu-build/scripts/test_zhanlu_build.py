@@ -97,6 +97,40 @@ class FakeRunner:
             if "--dry-run" not in command and self.fail_sync_apply:
                 raise subprocess.CalledProcessError(2, command)
             return zhanlu_build.CommandResult()
+        if command[:2] == ["bash", "./scripts/sync-zhanlu-selected-refs.sh"]:
+            if "--dry-run" in command:
+                if self.fail_sync_preview:
+                    raise subprocess.CalledProcessError(1, command)
+                plan_file = Path(command[command.index("--output-plan") + 1])
+                selected = [
+                    command[index + 1]
+                    for index, value in enumerate(command)
+                    if value == "--ref"
+                ]
+                rows = []
+                for number, value in enumerate(selected, start=1):
+                    repository, requested = value.split("=", 1)
+                    source_sha = str(number) * 40
+                    previous_sha = str(number + 3) * 40
+                    rows.append(
+                        "\t".join(
+                            [
+                                repository,
+                                "branch",
+                                requested,
+                                f"refs/heads/{requested}",
+                                f"refs/heads/{requested}",
+                                source_sha,
+                                source_sha,
+                                previous_sha,
+                                "update",
+                            ]
+                        )
+                    )
+                plan_file.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            elif self.fail_sync_apply:
+                raise subprocess.CalledProcessError(2, command)
+            return zhanlu_build.CommandResult()
         if command[:2] == ["bash", "create-release.sh"]:
             if self.fail_create:
                 raise subprocess.CalledProcessError(9, command)
@@ -127,6 +161,10 @@ class ZhanluBuildTest(unittest.TestCase):
         )
         (self.release_repo / "scripts" / "sync-zhanlu-gitlab-to-github.sh").write_text(
             "case x in\n--dry-run) ;;\n--all-refs) ;;\nesac\n",
+            encoding="utf-8",
+        )
+        (self.release_repo / "scripts" / "sync-zhanlu-selected-refs.sh").write_text(
+            "case x in\n--ref) ;;\n--output-plan) ;;\n--apply-plan) ;;\nesac\n",
             encoding="utf-8",
         )
         (
@@ -232,6 +270,78 @@ class ZhanluBuildTest(unittest.TestCase):
         self.assertIn(
             "--all-refs", zhanlu_build.source_sync_command(plan, dry_run=True)
         )
+
+    def test_portal_selected_sync_never_uses_all_refs(self):
+        plan = zhanlu_build.make_plan(
+            self.config(
+                selected_source_sync=True,
+                source_branch="feature/code",
+                zhanlu_core_ref="develop",
+                zhanlu_vs_ref="refs/tags/v2",
+            )
+        )
+        self.assertFalse(plan.source_sync_all_refs)
+        command = zhanlu_build.selected_source_sync_command(
+            plan, dry_run=True, plan_file=Path("plan.tsv")
+        )
+        self.assertNotIn("--all-refs", command)
+        self.assertIn("zhanlu-code=feature/code", command)
+        self.assertIn("zhanlu-core=develop", command)
+        self.assertIn("zhanlu-vs=refs/tags/v2", command)
+
+    def test_selected_sync_pins_workflow_refs_and_emits_source_refs(self):
+        plan = zhanlu_build.make_plan(
+            self.config(
+                apply=True,
+                selected_source_sync=True,
+                source_branch="feature/code",
+                zhanlu_core_ref="feature/core",
+                zhanlu_vs_ref="feature/vs",
+                output_format="json",
+            )
+        )
+        runner = FakeRunner()
+        result, output = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        selected_calls = self.command_calls(
+            runner, ["bash", "./scripts/sync-zhanlu-selected-refs.sh"]
+        )
+        self.assertEqual(len(selected_calls), 2)
+        self.assertNotIn("--all-refs", " ".join(selected_calls[0][0]))
+        trigger = self.command_calls(
+            runner, ["bash", "./scripts/trigger-stable-release.sh"]
+        )[0]
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-core-ref") + 1], "2" * 40)
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-vs-ref") + 1], "3" * 40)
+        self.assertEqual(trigger[2]["ZHANLU_DELIVERY_SOURCE_COMMIT"], "1" * 40)
+        self.assertIn('"event": "source_refs_resolved"', output)
+        self.assertIn('"sourceRefs"', output)
+
+    def test_trigger_only_reuses_persisted_source_commits(self):
+        plan = zhanlu_build.make_plan(
+            self.config(
+                apply=True,
+                trigger_only=True,
+                platform="linux",
+                selected_source_sync=True,
+                source_branch="feature/code",
+                source_commit="a" * 40,
+                zhanlu_core_commit="b" * 40,
+                zhanlu_vs_commit="c" * 40,
+            )
+        )
+        runner = FakeRunner()
+        result, _ = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        self.assertFalse(
+            self.command_calls(runner, ["bash", "./scripts/sync-zhanlu-selected-refs.sh"])
+        )
+        trigger = self.command_calls(
+            runner, ["bash", "./scripts/trigger-stable-release.sh"]
+        )[0]
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-core-ref") + 1], "b" * 40)
+        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-vs-ref") + 1], "c" * 40)
+        self.assertEqual(trigger[2]["ZHANLU_DELIVERY_SOURCE_COMMIT"], "a" * 40)
 
     def test_cli_defaults_codex_runtime_bundle_to_zero(self):
         config = zhanlu_build.parse_config(

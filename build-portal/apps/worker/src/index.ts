@@ -6,7 +6,7 @@ import type pg from "pg";
 import { buildSpecSchema, resolveReleaseVersion, terminalPhases, type BuildPhase, type BuildSpec } from "@zhanlu/build-portal-contracts";
 import { appendBuildEvent, closePool, getPool } from "@zhanlu/build-portal-db";
 import { assertRepositoryAccess, github, installationToken, startCredentialBroker } from "@zhanlu/build-portal-github-app";
-import { runRelease } from "@zhanlu/build-portal-release-runner";
+import { runRelease, type SourceRefs } from "@zhanlu/build-portal-release-runner";
 import { decideRecovery } from "./recovery.js";
 import { configureReleaseGitIdentity } from "./git-identity.js";
 import { extractReleaseUrl } from "./release-url.js";
@@ -20,6 +20,24 @@ function repositoryConfig(): Record<string, RepositoryUrls> { const raw = proces
 function checkoutUrl(name:string):string{const value=repositoryConfig()[name];const url=typeof value==="string"?value:name==="vscodium"?value?.github:value?.gitlab??value?.github;if(!url)throw new Error(`repository URL missing for ${name}`);return url;}
 async function git(args: string[], cwd?: string) { return run("git", args, { cwd, env: process.env, maxBuffer: 10 * 1024 * 1024 }); }
 async function setPhase(id: string, phase: BuildPhase, reason?: string): Promise<void> { await getPool().query("UPDATE builds SET phase=$2,phase_reason=$3,updated_at=now(),lease_expires_at=now()+interval '90 seconds' WHERE id=$1", [id, phase, reason ?? null]); await appendBuildEvent(id, "phase.changed", { phase, reason }); }
+
+function sourceRefsFromResolved(resolved: Record<string, unknown> | null): SourceRefs | undefined {
+  const value = resolved?.sourceRefs;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const refs = value as SourceRefs;
+  for (const repository of ["zhanlu-code", "zhanlu-core", "zhanlu-vs"]) {
+    const item = refs[repository];
+    if (!item || !/^[0-9a-f]{40}$/.test(item.gitlabSha ?? "")) return undefined;
+  }
+  return refs;
+}
+
+async function persistSourceRefs(buildId: string, sourceRefs: SourceRefs): Promise<void> {
+  await getPool().query(
+    "UPDATE builds SET resolved=coalesce(resolved,'{}'::jsonb)||jsonb_build_object('sourceRefs',$2::jsonb),updated_at=now() WHERE id=$1",
+    [buildId, JSON.stringify(sourceRefs)],
+  );
+}
 
 async function ensureCheckout(name: string, branch: string): Promise<void> {
   const url = checkoutUrl(name); const path = `${WORKSPACE_ROOT}/${name}`;
@@ -54,12 +72,13 @@ async function findRunsByRequest(build: BuildRow, platforms: Array<keyof typeof 
 
 async function dispatch(build: BuildRow, spec: BuildSpec): Promise<void> {
   const token=await installationToken();process.env.GH_TOKEN=token;process.env.GITHUB_TOKEN=token;
-  let observed:BuildPhase|undefined;const log=async(line:string)=>{let phase:BuildPhase|undefined;if(line.includes("Previewing GitLab"))phase="source_sync_preview";else if(line.includes("Synchronizing GitLab"))phase="source_sync";else if(line.startsWith("Preflight"))phase="preflight";else if(line.includes("Creating/updating the release"))phase="release_prepare";else if(line.includes("Dispatching stable workflow"))phase="dispatching";if(phase&&phase!==observed){observed=phase;await setPhase(build.id,phase);}const releaseUrl=extractReleaseUrl(line);if(releaseUrl)await getPool().query("UPDATE builds SET release_url=$2,updated_at=now() WHERE id=$1",[build.id,releaseUrl]);await appendBuildEvent(build.id,"runner.log",{line});};
+  let persistedSourceRefs=sourceRefsFromResolved(build.resolved);let observed:BuildPhase|undefined;const log=async(line:string)=>{let phase:BuildPhase|undefined;if(line.includes("Previewing selected GitLab")||line.includes("Previewing GitLab"))phase="source_sync_preview";else if(line.includes("Synchronizing selected GitLab")||line.includes("Synchronizing GitLab"))phase="source_sync";else if(line.startsWith("Preflight"))phase="preflight";else if(line.includes("Creating/updating the release"))phase="release_prepare";else if(line.includes("Dispatching stable workflow"))phase="dispatching";if(phase&&phase!==observed){observed=phase;await setPhase(build.id,phase);}if(line.startsWith("{")){try{const value=JSON.parse(line) as {event?:string;sourceRefs?:SourceRefs};if(value.event==="source_refs_resolved"&&value.sourceRefs){persistedSourceRefs=value.sourceRefs;await persistSourceRefs(build.id,value.sourceRefs);}}catch{/* ordinary JSON log */}}const releaseUrl=extractReleaseUrl(line);if(releaseUrl)await getPool().query("UPDATE builds SET release_url=$2,updated_at=now() WHERE id=$1",[build.id,releaseUrl]);await appendBuildEvent(build.id,"runner.log",{line});};
   const existing = await getPool().query<{platform:string;run_id:string|null}>("SELECT platform,run_id FROM build_runs WHERE build_id=$1", [build.id]); const persisted=existing.rows.filter((row)=>row.run_id).map((row)=>row.platform);const selected=selectedPlatforms(spec);const initiallyMissing=selected.filter((platform)=>!persisted.includes(platform));const discovered:Record<string,number>={};
   if (["dispatching","running"].includes(build.phase)&&initiallyMissing.length) { const recovered = await findRunsByRequest(build, initiallyMissing); await saveRuns(build,recovered); for(const item of recovered){const platform=Object.entries(workflowByPlatform).find(([,workflow])=>workflow===item.workflow)?.[0];if(platform)discovered[platform]=1;} }
   const decision=decideRecovery({phase:build.phase,selected,persisted,discovered});if(decision.mode==="needs-attention")throw new Error(`ambiguous workflow attribution: ${decision.reason}`);if(decision.mode==="monitor")return;
-  if(decision.mode==="full"){const result=await runRelease(spec,build.request_id,{workspace:WORKSPACE_ROOT,apply:true,onLog:log});await saveRuns(build,result.runs);return;}
-  for (const platform of decision.platforms) { const result = await runRelease({ ...spec, platform:platform as keyof typeof workflowByPlatform, triggerOnly: true }, build.request_id, { workspace: WORKSPACE_ROOT, apply: true, onLog: log }); await saveRuns(build,result.runs); }
+  if(decision.mode==="full"){const result=await runRelease(spec,build.request_id,{workspace:WORKSPACE_ROOT,apply:true,onLog:log});if(result.sourceRefs){persistedSourceRefs=result.sourceRefs;await persistSourceRefs(build.id,result.sourceRefs);}await saveRuns(build,result.runs);return;}
+  if(!persistedSourceRefs)throw new Error("persisted source refs are required for platform retry");
+  for (const platform of decision.platforms) { const result = await runRelease({ ...spec, platform:platform as keyof typeof workflowByPlatform, triggerOnly: true }, build.request_id, { workspace: WORKSPACE_ROOT, apply: true, sourceRefs:persistedSourceRefs, onLog: log }); await saveRuns(build,result.runs); }
 }
 
 async function monitor(build: BuildRow): Promise<void> {
@@ -88,7 +107,7 @@ async function monitor(build: BuildRow): Promise<void> {
   }
 }
 
-async function processBuild(build: BuildRow): Promise<void> { const parsed=buildSpecSchema.parse(build.spec); if(build.phase==="running"){await monitor(build);return;} let lock:pg.PoolClient|undefined; try { lock=await acquirePrepareLock(); if(build.phase!=="dispatching")await prepareWorkspace(parsed);const resolved=build.resolved ?? {...resolveReleaseVersion(parsed),platforms:selectedPlatforms(parsed)};const spec=parsed.timePatch?parsed:{...parsed,timePatch:String(resolved.timePatch)};await getPool().query("UPDATE builds SET resolved=$2::jsonb,spec=$3::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved),JSON.stringify(spec)]);if(build.phase==="queued")await setPhase(build.id,"source_sync_preview");await dispatch(build,spec); await setPhase(build.id,"running"); } catch(error) { await setPhase(build.id,error instanceof Error&&error.message.includes("ambiguous")?"needs_attention":"failed",error instanceof Error?error.message:"unknown"); return; } finally { if(lock) await releasePrepareLock(lock); } await monitor(build); }
+async function processBuild(build: BuildRow): Promise<void> { const parsed=buildSpecSchema.parse(build.spec); if(build.phase==="running"){await monitor(build);return;} let lock:pg.PoolClient|undefined; try { lock=await acquirePrepareLock(); if(build.phase!=="dispatching")await prepareWorkspace(parsed);const resolved=build.resolved ?? {...resolveReleaseVersion(parsed),platforms:selectedPlatforms(parsed)};const spec=parsed.timePatch?parsed:{...parsed,timePatch:String(resolved.timePatch)};await getPool().query("UPDATE builds SET resolved=$2::jsonb,spec=$3::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved),JSON.stringify(spec)]);if(build.phase==="queued")await setPhase(build.id,sourceRefsFromResolved(resolved)?"preflight":"source_sync_preview");await dispatch(build,spec); await setPhase(build.id,"running"); } catch(error) { const reason=error instanceof Error?error.message:"unknown";await setPhase(build.id,reason.includes("ambiguous")||reason.includes("persisted source refs")?"needs_attention":"failed",reason); return; } finally { if(lock) await releasePrepareLock(lock); } await monitor(build); }
 
 async function processMockBuild(build: BuildRow): Promise<void>{const spec=buildSpecSchema.parse(build.spec);const resolved=build.resolved??{...resolveReleaseVersion(spec),platforms:selectedPlatforms(spec)};await setPhase(build.id,"preflight");await getPool().query("UPDATE builds SET resolved=$2::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved)]);await setPhase(build.id,"dispatching");for(const platform of selectedPlatforms(spec))await getPool().query("INSERT INTO build_runs(build_id,platform,workflow,run_id,run_url,status,conclusion,dispatch_attempts) VALUES($1,$2,$3,$4,$5,'completed','success',1) ON CONFLICT(build_id,platform) DO UPDATE SET status='completed',conclusion='success',updated_at=now()",[build.id,platform,workflowByPlatform[platform],`mock-${build.request_id}-${platform}`,`https://example.invalid/mock/${build.request_id}/${platform}`]);await setPhase(build.id,"succeeded","mock executor");}
 

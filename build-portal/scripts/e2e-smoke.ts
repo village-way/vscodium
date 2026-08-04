@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-const base = (process.env.E2E_BASE_URL ?? "https://127.0.0.1:30443").replace(/\/$/, "");
+const base = (process.env.E2E_BASE_URL ?? "https://localhost:30443").replace(/\/$/, "");
 const username = process.env.E2E_USERNAME ?? "admin";
 const password = process.env.E2E_PASSWORD;
 if (!password) throw new Error("E2E_PASSWORD is required");
@@ -52,8 +52,9 @@ assert.equal(preview.status, 201);
 const previewValue = await preview.json() as Json;
 const build = previewValue.build as Json;
 assert.equal(build.spec.sourceBranch, "feature/release");
-assert.equal(build.spec.zhanluCoreRef, "v1.4.1");
+assert.equal(build.spec.zhanluCoreRef, "refs/tags/v1.4.1");
 assert.equal(build.spec.zhanluVsRef, "a".repeat(40));
+assert.equal(build.resolved.syncScope, "selected-refs");
 const detailPage = await request(`/builds/${build.id}`, {}, cookie);
 assert.equal(detailPage.status, 200);
 await detailPage.text();

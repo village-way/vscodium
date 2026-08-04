@@ -48,4 +48,4 @@ docker buildx build --platform linux/amd64 -f deploy/docker/Dockerfile.worker -t
 
 ## 安全边界
 
-Worker 是唯一持有 GitHub App 私钥和 GitLab Token 的组件。Git/GH/Octokit 使用一小时安装令牌，broker 提前五分钟刷新；远端 URL、数据库事件和日志不得含 Token。预览不执行远端写入。同步失败、force-with-lease 冲突、Release 冲突或 run 归属不唯一时任务失败关闭或进入 `needs_attention`。
+Worker 是唯一持有 GitHub App 私钥和 GitLab Token 的组件。Git/GH/Octokit 使用一小时安装令牌，broker 提前五分钟刷新；远端 URL、数据库事件和日志不得含 Token。门户构建只预检并同步页面选择的 zhanlu-code、zhanlu-core、zhanlu-vs 引用，以 GitLab 为准并使用预检 SHA 的精确 `--force-with-lease`，绝不调用 `--all-refs`。预览不执行远端写入。同步失败、force-with-lease 冲突、Release 冲突或 run 归属不唯一时任务失败关闭或进入 `needs_attention`。

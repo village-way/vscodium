@@ -17,10 +17,13 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
 - Use `develop` for zhanlu-code, zhanlu-core, and zhanlu-vs.
 - Use delivery Profile `default`, workflow dispatch, and platform `all`.
 - Do not bundle the optional Codex CLI runtime by default; its build input is `0`.
-- Before every applied build or release, preview and then synchronize the five
+- For an interactive wrapper invocation, preview and then synchronize the five
   component repositories from GitLab to GitHub. Use default branches for the
   normal `develop` flow and all refs when any requested source ref is not
   `develop`.
+- For build-portal invocations, use `--selected-source-sync`. This resolves and
+  synchronizes only the selected zhanlu-code, zhanlu-core, and zhanlu-vs refs;
+  it must never add `--all-refs` or enumerate unselected repositories/refs.
 - Keep the GitHub Release as draft unless the user explicitly requests
   publication.
 - Sync the five component GitLab repositories for formal releases; do not sync
@@ -53,9 +56,12 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
    for five components, and dispatch workflows.
 5. Only after explicit confirmation in the current conversation, repeat the
    same command with `--apply`.
-6. During apply, run `sync-zhanlu-gitlab-to-github.sh --dry-run` first. Continue
-   to the real synchronization only when the preview exits zero; continue to
-   release creation only when the real synchronization exits zero.
+6. During an interactive apply, run
+   `sync-zhanlu-gitlab-to-github.sh --dry-run` first. For build-portal apply,
+   run `sync-zhanlu-selected-refs.sh --dry-run` with exactly the three selected
+   refs, then apply its immutable plan. Continue to synchronization only when
+   every preview succeeds; continue to release creation only when every
+   synchronization succeeds.
 7. Report the source synchronization result, GitHub Release URL, GitLab release
    synchronization result, workflow run URLs, conclusions, and failed job
    names. Do not call a release successful until every selected workflow has
@@ -87,11 +93,11 @@ python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
   --kind development --version 1.4.1 --no-wait
 
 # Machine-readable portal dispatch; the final JSON line uses schema v1 and
-# contains the exact workflow run IDs/URLs returned by GitHub
+# contains resolved sourceRefs plus the exact GitHub workflow run IDs/URLs
 python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
   --kind development --version 1.4.1 --platform linux \
   --request-id 71efcf01-7b10-4db0-9efd-f2af58f26a81 \
-  --generate-only --no-wait --output json
+  --selected-source-sync --generate-only --no-wait --output json
 ```
 
 Use `--source-branch`, `--zhanlu-core-ref`, `--zhanlu-vs-ref`,
@@ -106,9 +112,14 @@ non-default source or patch.
   before release preflight, creation, or workflow dispatch. Treat exit code 1
   (partial/skipped refs) and exit code 2 (configuration/authentication failure)
   as blocking failures.
-- Use the synchronization script's default-branch mode when all three build
-  refs are `develop`; add `--all-refs` when source-branch, zhanlu-core-ref, or
-  zhanlu-vs-ref selects anything else.
+- For direct interactive builds, use the synchronization script's
+  default-branch mode when all three build refs are `develop`; add `--all-refs`
+  when one selects anything else. This legacy mirror-maintenance behavior does
+  not apply to the build portal.
+- For portal builds, GitLab is authoritative. Preview all three selected refs
+  before the first remote write, then update only their corresponding GitHub
+  refs with exact `--force-with-lease=<ref>:<preview-sha>`. Never use an
+  unconditional force push. Preserve the resolved source commits for retries.
 - Require the release checkout to be clean, on `master`, and equal to
   `origin/master` after fetch.
 - Before formal GitLab synchronization, require `zhanlu-cloud`, `zhanlu-code`,

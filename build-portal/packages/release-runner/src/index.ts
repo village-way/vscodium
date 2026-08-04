@@ -4,10 +4,18 @@ import type { BuildSpec } from "@zhanlu/build-portal-contracts";
 const SECRET_PATTERN = /(authorization:\s*bearer\s+|token[=:]\s*|password[=:]\s*|cookie:\s*)\S+/gi;
 export function redact(line: string): string { return line.replace(SECRET_PATTERN, "$1[REDACTED]").replace(/(https?:\/\/)[^/@\s]+@/g, "$1[REDACTED]@"); }
 
-export type RunnerResult = { schemaVersion: "v1"; requestId?: string; releaseVersion: string; versionTimePatch: string; runs: Array<{ workflow: string; runId: number; url: string }> };
+export type SourceRefResult = { repository: string; refType: string; requestedRef: string; sourceRef: string; destinationRef: string; gitlabSha: string; gitlabObjectSha: string; previousGithubSha: string; action: string };
+export type SourceRefs = Record<string, SourceRefResult>;
+export type RunnerResult = { schemaVersion: "v1"; requestId?: string; releaseVersion: string; versionTimePatch: string; sourceRefs?: SourceRefs; runs: Array<{ workflow: string; runId: number; url: string }> };
 
-export function buildArguments(spec: BuildSpec, requestId: string, workspace: string, apply: boolean): string[] {
-  const args = ["--kind", spec.kind, "--version", spec.version, "--workspace", workspace, "--source-branch", spec.sourceBranch, "--delivery-profile", spec.deliveryProfile, "--zhanlu-core-ref", spec.zhanluCoreRef, "--zhanlu-vs-ref", spec.zhanluVsRef, "--bundle-codex-runtime", spec.bundleCodexRuntime ? "1" : "0", "--platform", spec.platform, "--request-id", requestId, "--output", "json", "--no-wait"];
+export function buildArguments(spec: BuildSpec, requestId: string, workspace: string, apply: boolean, sourceRefs?: SourceRefs): string[] {
+  const args = ["--kind", spec.kind, "--version", spec.version, "--workspace", workspace, "--source-branch", spec.sourceBranch, "--delivery-profile", spec.deliveryProfile, "--zhanlu-core-ref", spec.zhanluCoreRef, "--zhanlu-vs-ref", spec.zhanluVsRef, "--bundle-codex-runtime", spec.bundleCodexRuntime ? "1" : "0", "--platform", spec.platform, "--request-id", requestId, "--output", "json", "--no-wait", "--selected-source-sync"];
+  const sourceCommit = sourceRefs?.["zhanlu-code"]?.gitlabSha;
+  const coreCommit = sourceRefs?.["zhanlu-core"]?.gitlabSha;
+  const vsCommit = sourceRefs?.["zhanlu-vs"]?.gitlabSha;
+  if (sourceCommit) args.push("--source-commit", sourceCommit);
+  if (coreCommit) args.push("--zhanlu-core-commit", coreCommit);
+  if (vsCommit) args.push("--zhanlu-vs-commit", vsCommit);
   if (spec.timePatch) args.push("--time-patch", spec.timePatch);
   if (spec.outputMode === "workflow-artifact") args.push("--generate-only");
   if (spec.triggerOnly) args.push("--trigger-only");
@@ -17,9 +25,9 @@ export function buildArguments(spec: BuildSpec, requestId: string, workspace: st
   return args;
 }
 
-export async function runRelease(spec: BuildSpec, requestId: string, options: { workspace: string; apply: boolean; onLog?: (line: string) => Promise<void> }): Promise<RunnerResult> {
+export async function runRelease(spec: BuildSpec, requestId: string, options: { workspace: string; apply: boolean; sourceRefs?: SourceRefs; onLog?: (line: string) => Promise<void> }): Promise<RunnerResult> {
   const script = process.env.ZHANLU_BUILD_SCRIPT ?? `${options.workspace}/vscodium/.agents/skills/zhanlu-build/scripts/zhanlu_build.py`;
-  const child = spawn("python3", [script, ...buildArguments(spec, requestId, options.workspace, options.apply)], { cwd: `${options.workspace}/vscodium`, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("python3", [script, ...buildArguments(spec, requestId, options.workspace, options.apply, options.sourceRefs)], { cwd: `${options.workspace}/vscodium`, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
   const jsonLines: string[] = []; let failureHint = ""; let processing=Promise.resolve();const buffers={stdout:"",stderr:""};
   const consumeLine=async(raw:string)=>{if(!raw)return;const line=redact(raw);if(line.startsWith("{"))jsonLines.push(line);if(/^(?:ERROR|fatal:|error:)/i.test(line.trim()))failureHint=line.trim();await options.onLog?.(line);};
   const consumeFailureLine=consumeLine;
