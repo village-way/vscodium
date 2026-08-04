@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 from io import StringIO
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("zhanlu_build.py")
+REPOSITORY_ROOT = SCRIPT.parents[4]
 SPEC = importlib.util.spec_from_file_location("zhanlu_build", SCRIPT)
 assert SPEC and SPEC.loader
 zhanlu_build = importlib.util.module_from_spec(SPEC)
@@ -371,6 +373,91 @@ class ZhanluBuildTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertFalse(self.command_calls(runner, ["bash", "create-release.sh"]))
         self.assertFalse(self.command_calls(runner, ["gh", "release", "view"]))
+
+    def test_native_script_ignores_stale_local_release_metadata(self):
+        native_script = REPOSITORY_ROOT / "scripts" / "trigger-stable-release.sh"
+        scripts = self.release_repo / "scripts"
+        (scripts / "trigger-stable-release.sh").write_text(
+            native_script.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        (scripts / "resolve-release-delivery-profile.sh").write_text(
+            "resolve_release_delivery_profile() {\n"
+            "  ZHANLU_DELIVERY_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "  ZHANLU_DELIVERY_PROFILE_DIGEST=test-digest\n"
+            "  ZHANLU_DELIVERY_ASSETS_REPOSITORY=village-way/vscodium\n"
+            "  export ZHANLU_DELIVERY_SOURCE_COMMIT ZHANLU_DELIVERY_PROFILE_DIGEST ZHANLU_DELIVERY_ASSETS_REPOSITORY\n"
+            "}\n"
+            "prepare_release_delivery_profile() {\n"
+            "  resolve_release_delivery_profile\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        metadata = self.release_repo / ".zhanlu" / "release-delivery.json"
+        metadata.parent.mkdir()
+        metadata.write_text(
+            '{"releaseVersion":"1.4.15198","deliveryProfile":"default",'
+            '"sourceRef":"fix_CMSSAIYSYFXFS-400_codex",'
+            '"assetsRepository":"village-way/vscodium"}\n',
+            encoding="utf-8",
+        )
+        binaries = self.workspace / "bin"
+        binaries.mkdir()
+        gh_calls = self.workspace / "gh-calls"
+        (binaries / "gh").write_text(
+            "#!/usr/bin/env sh\n"
+            "printf '%s\\n' \"$*\" >> \"$GH_CALL_LOG\"\n"
+            "case \"$*\" in\n"
+            "  'auth status') exit 0 ;;\n"
+            "  'repo view --json nameWithOwner -q .nameWithOwner') echo village-way/vscodium ;;\n"
+            "  release\\ download*) exit 1 ;;\n"
+            "  *) echo \"unexpected gh call: $*\" >&2; exit 97 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        (binaries / "git").write_text(
+            "#!/usr/bin/env sh\n"
+            "if [ \"$*\" = 'branch --show-current' ]; then echo master; else exit 98; fi\n",
+            encoding="utf-8",
+        )
+        (binaries / "gh").chmod(0o755)
+        (binaries / "git").chmod(0o755)
+        environment = {
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "GH_CALL_LOG": str(gh_calls),
+        }
+        result = subprocess.run(
+            [
+                "bash", "./scripts/trigger-stable-release.sh", "--workflow",
+                "--generate", "--dry-run", "--source-branch", "develop",
+                "--delivery-profile", "default", "--platform", "linux",
+                "--release-version", "1.4.25202", "--version-time-patch", "5202",
+            ],
+            cwd=self.release_repo,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("unexpected gh call", result.stderr)
+        self.assertNotIn("release download", gh_calls.read_text(encoding="utf-8"))
+
+        gh_calls.write_text("", encoding="utf-8")
+        result = subprocess.run(
+            [
+                "bash", "./scripts/trigger-stable-release.sh", "--workflow",
+                "--dry-run", "--source-branch", "develop",
+                "--delivery-profile", "default", "--platform", "linux",
+                "--release-version", "1.4.25202", "--version-time-patch", "5202",
+            ],
+            cwd=self.release_repo,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("已固定为", result.stdout + result.stderr)
 
     def test_no_gitlab_removes_g_and_component_preflight(self):
         plan = zhanlu_build.make_plan(

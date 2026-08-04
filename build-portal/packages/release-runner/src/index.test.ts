@@ -34,3 +34,18 @@ test("release runner includes a redacted failure hint", async () => {
     await rm(workspace, { recursive: true, force: true });
   }
 });
+test("release runner preserves the actionable ANSI-prefixed error", async () => {
+  const workspace = await mkdtemp(`${tmpdir()}/zhanlu-release-runner-`);
+  const script = `${workspace}/fail.py`;
+  const previous = process.env.ZHANLU_BUILD_SCRIPT;
+  try {
+    await mkdir(`${workspace}/vscodium`, { recursive: true });
+    await writeFile(script, "import sys\nsys.stderr.write('\\x1b[0;31m[ERROR] stale delivery metadata\\x1b[0m\\n')\nsys.stderr.write('ERROR: command failed (1): bash trigger.sh\\n')\nsys.exit(1)\n", "utf8");
+    process.env.ZHANLU_BUILD_SCRIPT = script;
+    await assert.rejects(() => runRelease(spec, "request-failure", { workspace, apply: true }), /zhanlu_build\.py exited with 1: \[ERROR\] stale delivery metadata/);
+  } finally {
+    if (previous === undefined) delete process.env.ZHANLU_BUILD_SCRIPT;
+    else process.env.ZHANLU_BUILD_SCRIPT = previous;
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

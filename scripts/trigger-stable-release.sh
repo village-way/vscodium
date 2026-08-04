@@ -273,13 +273,28 @@ resolve_delivery_pin() {
     local metadata_dir
     local metadata=""
     local local_metadata="./.zhanlu/release-delivery.json"
+    local local_metadata_matches=false
     local repository_hint="${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-}"
     metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/zhanlu-release-metadata.XXXXXX")"
+
+    # Workflow-artifact builds do not use a GitHub Release. Resolve and validate
+    # the requested Profile directly so stale release metadata in the persistent
+    # worker checkout can never affect generate-only dispatches.
+    if [[ "${GENERATE_ONLY}" == true ]]; then
+        prepare_release_delivery_profile "${SOURCE_BRANCH}" "${DELIVERY_PROFILE}" "${REPO}"
+        rm -rf "${metadata_dir}"
+        print_info "定向交付 Profile: ${DELIVERY_PROFILE}"
+        print_info "zhanlu-code 固定提交: ${ZHANLU_DELIVERY_SOURCE_COMMIT}"
+        print_info "Profile 摘要: ${ZHANLU_DELIVERY_PROFILE_DIGEST}"
+        print_info "Release 制品仓库: ${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
+        return
+    fi
 
     if [[ -f "${local_metadata}" ]] && \
         [[ "$(jq -r '.releaseVersion // empty' "${local_metadata}")" == "${RELEASE_VERSION}" ]] && \
         [[ "$(jq -r '.deliveryProfile // empty' "${local_metadata}")" == "${DELIVERY_PROFILE}" ]] && \
         [[ "$(jq -r '.sourceRef // empty' "${local_metadata}")" == "${SOURCE_BRANCH}" ]]; then
+        local_metadata_matches=true
         repository_hint="$(jq -r '.assetsRepository' "${local_metadata}")"
     fi
     if [[ -z "${repository_hint}" && "${DELIVERY_PROFILE}" == "default" ]]; then
@@ -291,7 +306,8 @@ resolve_delivery_pin() {
         --pattern zhanlu-delivery.json \
         --dir "${metadata_dir}" >/dev/null 2>&1; then
         metadata="${metadata_dir}/zhanlu-delivery.json"
-    elif [[ -f "${local_metadata}" && "${repository_hint}" == "$(jq -r '.assetsRepository // empty' "${local_metadata}")" ]]; then
+    elif [[ "${local_metadata_matches}" == true ]] && \
+        [[ "${repository_hint}" == "$(jq -r '.assetsRepository // empty' "${local_metadata}")" ]]; then
         metadata="${local_metadata}"
     fi
 
