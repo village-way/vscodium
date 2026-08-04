@@ -5,16 +5,18 @@ import { promisify } from "node:util";
 import type pg from "pg";
 import { buildSpecSchema, resolveReleaseVersion, terminalPhases, type BuildPhase, type BuildSpec } from "@zhanlu/build-portal-contracts";
 import { appendBuildEvent, closePool, getPool } from "@zhanlu/build-portal-db";
-import { assertRepositoryAccess, github, installationToken, startCredentialBroker } from "@zhanlu/build-portal-github-app";
+import { assertRepositoryAccess, github, installationToken, invalidateInstallationToken, startCredentialBroker } from "@zhanlu/build-portal-github-app";
 import { runRelease, type SourceRefs } from "@zhanlu/build-portal-release-runner";
 import { decideRecovery } from "./recovery.js";
 import { configureReleaseGitIdentity } from "./git-identity.js";
 import { extractReleaseUrl } from "./release-url.js";
 import { runnerPhase } from "./runner-phase.js";
 import { summarizeRuns, type RunObservation } from "./run-status.js";
+import { isAuthFailure, MonitorCoordinator, runMonitorWithRecovery } from "./monitor-recovery.js";
 
 const run = promisify(execFile); const WORKER_ID = process.env.WORKER_ID ?? hostname(); const VERSION = process.env.PORTAL_VERSION ?? "development"; const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/var/lib/zhanlu-build/workspace"; const PREPARE_LOCK = 0x5a4c524c; const POLL_MS = Number(process.env.WORKER_POLL_MS ?? 5000);
 const workflowByPlatform = { macos: "stable-macos.yml", linux: "stable-linux.yml", windows: "stable-windows.yml" } as const;
+const monitorCoordinator = new MonitorCoordinator();
 type BuildRow = { id: string; request_id: string; spec: unknown; resolved: Record<string, unknown> | null; phase: BuildPhase; cancel_requested_at: Date | null };
 
 type RepositoryUrls=string|{github?:string;gitlab?:string};
@@ -99,7 +101,24 @@ async function monitor(build: BuildRow): Promise<void> {
   }
 }
 
-async function processBuild(build: BuildRow): Promise<void> { const parsed=buildSpecSchema.parse(build.spec); if(build.phase==="running"){await monitor(build);return;} let lock:pg.PoolClient|undefined; try { lock=await acquirePrepareLock(); if(build.phase!=="dispatching")await prepareWorkspace(parsed);const resolved=build.resolved ?? {...resolveReleaseVersion(parsed),platforms:selectedPlatforms(parsed)};const spec=parsed.timePatch?parsed:{...parsed,timePatch:String(resolved.timePatch)};await getPool().query("UPDATE builds SET resolved=$2::jsonb,spec=$3::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved),JSON.stringify(spec)]);if(build.phase==="queued")await setPhase(build.id,sourceRefsFromResolved(resolved)?"preflight":"source_sync_preview");await dispatch(build,spec); await setPhase(build.id,"running"); } catch(error) { const reason=error instanceof Error?error.message:"unknown";await setPhase(build.id,reason.includes("ambiguous")||reason.includes("persisted source refs")?"needs_attention":"failed",reason); return; } finally { if(lock) await releasePrepareLock(lock); } await monitor(build); }
+function monitorWithRecovery(build: BuildRow): void {
+  monitorCoordinator.start(
+    build.id,
+    () => runMonitorWithRecovery(
+      () => monitor(build),
+      async (error) => {
+        if (isAuthFailure(error)) invalidateInstallationToken();
+      },
+    ),
+    async (error) => {
+      const reason = error instanceof Error ? error.message : "unknown monitor error";
+      console.error(`monitor failed for build ${build.id}`, reason);
+      await setPhase(build.id, "needs_attention", `monitor failed: ${reason}`);
+    },
+  );
+}
+
+async function processBuild(build: BuildRow): Promise<void> { const parsed=buildSpecSchema.parse(build.spec); if(build.phase==="running"){monitorWithRecovery(build);return;} let lock:pg.PoolClient|undefined; try { lock=await acquirePrepareLock(); if(build.phase!=="dispatching")await prepareWorkspace(parsed);const resolved=build.resolved ?? {...resolveReleaseVersion(parsed),platforms:selectedPlatforms(parsed)};const spec=parsed.timePatch?parsed:{...parsed,timePatch:String(resolved.timePatch)};await getPool().query("UPDATE builds SET resolved=$2::jsonb,spec=$3::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved),JSON.stringify(spec)]);if(build.phase==="queued")await setPhase(build.id,sourceRefsFromResolved(resolved)?"preflight":"source_sync_preview");await dispatch(build,spec); await setPhase(build.id,"running"); } catch(error) { const reason=error instanceof Error?error.message:"unknown";await setPhase(build.id,reason.includes("ambiguous")||reason.includes("persisted source refs")?"needs_attention":"failed",reason); return; } finally { if(lock) await releasePrepareLock(lock); } monitorWithRecovery(build); }
 
 async function processMockBuild(build: BuildRow): Promise<void>{const spec=buildSpecSchema.parse(build.spec);const resolved=build.resolved??{...resolveReleaseVersion(spec),platforms:selectedPlatforms(spec)};await setPhase(build.id,"preflight");await getPool().query("UPDATE builds SET resolved=$2::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved)]);await setPhase(build.id,"dispatching");for(const platform of selectedPlatforms(spec))await getPool().query("INSERT INTO build_runs(build_id,platform,workflow,run_id,run_url,status,conclusion,dispatch_attempts) VALUES($1,$2,$3,$4,$5,'completed','success',1) ON CONFLICT(build_id,platform) DO UPDATE SET status='completed',conclusion='success',updated_at=now()",[build.id,platform,workflowByPlatform[platform],`mock-${build.request_id}-${platform}`,`https://example.invalid/mock/${build.request_id}/${platform}`]);await setPhase(build.id,"succeeded","mock executor");}
 

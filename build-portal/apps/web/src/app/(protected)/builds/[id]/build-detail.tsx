@@ -11,7 +11,7 @@ type Run = { platform: string; workflow: string; run_id?: string; run_url?: stri
 type Detail = { build: Build; runs: Run[] };
 
 const repositories = ["zhanlu-code", "zhanlu-core", "zhanlu-vs"] as const;
-const labels: Record<string, string> = { awaiting_confirmation: "待确认", queued: "排队中", source_sync_preview: "源码预检", source_sync: "源码同步", preflight: "发布预检", release_prepare: "准备 Release", dispatching: "触发工作流", running: "平台构建", succeeded: "构建成功", failed: "构建失败", cancelled: "已取消", needs_attention: "需人工处理", preview_queued: "准备预览", previewing: "生成预览" };
+const labels: Record<string, string> = { awaiting_confirmation: "待确认", queued: "准备触发", source_sync_preview: "源码预检", source_sync: "源码同步", preflight: "发布预检", release_prepare: "准备 Release", dispatching: "触发工作流", running: "平台构建", succeeded: "构建成功", failed: "构建失败", cancelled: "已取消", needs_attention: "需人工处理", preview_queued: "准备预览", previewing: "生成预览" };
 const terminal = new Set(["succeeded", "failed", "cancelled", "needs_attention"]);
 const date = (value?: string) => value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tokyo" }).format(new Date(value)) : "—";
 const shortSha = (value?: string) => value ? value.slice(0, 12) : "—";
@@ -86,6 +86,6 @@ export function BuildDetail() {
       </section>
     </div>
 
-    {confirming && <div className="modal-backdrop" role="presentation"><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">确认构建</h2><p>确认后会将选定 GitLab 引用同步到 GitHub，并触发构建。</p>{spec.publish && <label>输入确认短语 <strong>FORMAL {resolved.releaseVersion}</strong><input value={phrase} onChange={(event) => setPhrase(event.target.value)} autoFocus /></label>}<div className="action-bar"><button disabled={pending || (Boolean(spec.publish) && !phrase)} onClick={() => void action("confirm")}>{pending ? "确认中…" : "确认并排队"}</button><button className="secondary" disabled={pending} onClick={() => setConfirming(false)}>返回检查</button></div></div></div>}
+    {confirming && <div className="modal-backdrop" role="presentation"><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">确认构建</h2><p>确认后会将选定 GitLab 引用同步到 GitHub，并触发构建。</p>{spec.publish && <label>输入确认短语 <strong>FORMAL {resolved.releaseVersion}</strong><input value={phrase} onChange={(event) => setPhrase(event.target.value)} autoFocus /></label>}<div className="action-bar"><button disabled={pending || (Boolean(spec.publish) && !phrase)} onClick={() => void action("confirm")}>{pending ? "确认中…" : "确认并触发"}</button><button className="secondary" disabled={pending} onClick={() => setConfirming(false)}>返回检查</button></div></div></div>}
   </main>;
 }

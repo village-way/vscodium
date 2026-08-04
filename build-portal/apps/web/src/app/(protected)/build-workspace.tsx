@@ -18,7 +18,7 @@ const repositoryTitles: Record<Repository, string> = {
   "zhanlu-vs": "zhanlu-vs",
 };
 const syncLabels: Record<string, string> = { in_sync: "已同步", diverged: "有差异", single_provider: "单端" };
-const statusLabels: Record<string, string> = { awaiting_confirmation: "待确认", queued: "排队中", source_sync_preview: "同步预检", source_sync: "同步中", preflight: "发布预检", release_prepare: "准备 Release", dispatching: "触发工作流", running: "构建中", succeeded: "构建成功", failed: "构建失败", cancelled: "已取消", needs_attention: "需人工处理", preview_queued: "准备预览", previewing: "生成预览" };
+const statusLabels: Record<string, string> = { awaiting_confirmation: "待确认", queued: "准备触发", source_sync_preview: "同步预检", source_sync: "同步中", preflight: "发布预检", release_prepare: "准备 Release", dispatching: "触发工作流", running: "构建中", succeeded: "构建成功", failed: "构建失败", cancelled: "已取消", needs_attention: "需人工处理", preview_queued: "准备预览", previewing: "生成预览" };
 const formatDate = (value?: string) => value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tokyo" }).format(new Date(value)) : "—";
 
 function statusClass(phase: string): string { return `status status-${phase}`; }

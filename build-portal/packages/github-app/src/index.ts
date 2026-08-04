@@ -6,6 +6,10 @@ import { Octokit } from "@octokit/rest";
 type CachedToken = { token: string; expiresAt: number };
 let cached: CachedToken | undefined;
 
+export function invalidateInstallationToken(): void {
+  cached = undefined;
+}
+
 async function privateKey(): Promise<string> {
   const path = process.env.GITHUB_APP_PRIVATE_KEY_FILE;
   if (!path) throw new Error("GITHUB_APP_PRIVATE_KEY_FILE is required");
