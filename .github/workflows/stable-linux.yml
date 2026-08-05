@@ -287,13 +287,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: zhanlu-responses-bridge-linux-x64
-          path: ${{ runner.temp }}/zhanlu-responses-bridge/linux-x64
+          path: zhanlu-responses-bridge/linux-x64
         if: env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       - name: Restore Responses Bridge executable permission
         run: |
-          bridge="${{ runner.temp }}/zhanlu-responses-bridge/linux-x64/zhanlu-responses-bridge"
+          bridge="$GITHUB_WORKSPACE/zhanlu-responses-bridge/linux-x64/zhanlu-responses-bridge"
           chmod 755 "$bridge"
           test -x "$bridge"
+          echo "ZHANLU_RESPONSES_BRIDGE_BIN_ROOT=$GITHUB_WORKSPACE/zhanlu-responses-bridge" >> "$GITHUB_ENV"
         if: env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
 
@@ -306,7 +307,6 @@ jobs:
           # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-          ZHANLU_RESPONSES_BRIDGE_BIN_ROOT: ${{ runner.temp }}/zhanlu-responses-bridge # zhanlu_change
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
@@ -461,13 +461,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: zhanlu-responses-bridge-${{ matrix.runtime_target }}
-          path: ${{ runner.temp }}/zhanlu-responses-bridge/${{ matrix.runtime_target }}
+          path: zhanlu-responses-bridge/${{ matrix.runtime_target }}
         if: env.DISABLED != 'yes' && env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && matrix.runtime_target != '' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       - name: Restore Responses Bridge executable permission
         run: |
-          bridge="${{ runner.temp }}/zhanlu-responses-bridge/${{ matrix.runtime_target }}/zhanlu-responses-bridge"
+          bridge="$GITHUB_WORKSPACE/zhanlu-responses-bridge/${{ matrix.runtime_target }}/zhanlu-responses-bridge"
           chmod 755 "$bridge"
           test -x "$bridge"
+          echo "ZHANLU_RESPONSES_BRIDGE_BIN_ROOT=$GITHUB_WORKSPACE/zhanlu-responses-bridge" >> "$GITHUB_ENV"
         if: env.DISABLED != 'yes' && env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && matrix.runtime_target != '' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
 
@@ -480,7 +481,6 @@ jobs:
           # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-          ZHANLU_RESPONSES_BRIDGE_BIN_ROOT: ${{ runner.temp }}/zhanlu-responses-bridge # zhanlu_change
         run: ./get_zhanlu.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
 
