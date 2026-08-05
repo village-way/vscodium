@@ -289,6 +289,12 @@ jobs:
           name: zhanlu-responses-bridge-linux-x64
           path: ${{ runner.temp }}/zhanlu-responses-bridge/linux-x64
         if: env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+      - name: Restore Responses Bridge executable permission
+        run: |
+          bridge="${{ runner.temp }}/zhanlu-responses-bridge/linux-x64/zhanlu-responses-bridge"
+          chmod 755 "$bridge"
+          test -x "$bridge"
+        if: env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
 
       - name: Get and build zhanlu-vs
@@ -456,6 +462,12 @@ jobs:
         with:
           name: zhanlu-responses-bridge-${{ matrix.runtime_target }}
           path: ${{ runner.temp }}/zhanlu-responses-bridge/${{ matrix.runtime_target }}
+        if: env.DISABLED != 'yes' && env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && matrix.runtime_target != '' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+      - name: Restore Responses Bridge executable permission
+        run: |
+          bridge="${{ runner.temp }}/zhanlu-responses-bridge/${{ matrix.runtime_target }}/zhanlu-responses-bridge"
+          chmod 755 "$bridge"
+          test -x "$bridge"
         if: env.DISABLED != 'yes' && env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && matrix.runtime_target != '' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
 
