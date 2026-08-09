@@ -1,8 +1,0 @@
-{
-  "name": "@zhanlu/build-portal-scheduler",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": { "build": "tsc -p tsconfig.json", "start": "node dist/index.js", "dev": "tsx src/index.ts", "typecheck": "tsc --noEmit", "test": "tsx --test src/*.test.ts", "lint": "tsc --noEmit" },
-  "dependencies": { "@zhanlu/build-portal-contracts": "workspace:*", "@zhanlu/build-portal-db": "workspace:*", "cron-parser": "5.3.1" }
-}

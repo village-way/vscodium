@@ -5,73 +5,19 @@ spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: web }
+metadata: { name: portal }
 spec:
-  podSelector: { matchLabels: { app: build-portal, component: web } }
+  podSelector: { matchLabels: { app: build-portal, component: web, architecture: sqlite } }
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - { ipBlock: { cidr: 192.168.22.0/24 } }
-        # kube-proxy may SNAT an in-cluster NodePort probe to the pod CIDR
-        # before Calico evaluates ingress; keep that internal path explicit.
         - { ipBlock: { cidr: 10.244.0.0/16 } }
       ports: [{ protocol: TCP, port: 8443 }]
   egress:
-    - to: [{ podSelector: { matchLabels: { app: postgres } } }]
-      ports: [{ protocol: TCP, port: 5432 }]
-    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
-      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata: { name: scheduler }
-spec:
-  podSelector: { matchLabels: { app: build-portal, component: scheduler } }
-  policyTypes: [Egress]
-  egress:
-    - to: [{ podSelector: { matchLabels: { app: postgres } } }]
-      ports: [{ protocol: TCP, port: 5432 }]
-    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
-      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata: { name: worker }
-spec:
-  podSelector: { matchLabels: { app: build-portal, component: worker } }
-  policyTypes: [Egress]
-  egress:
-    - to: [{ podSelector: { matchLabels: { app: postgres } } }]
-      ports: [{ protocol: TCP, port: 5432 }]
     - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
       ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
     - to: [{ ipBlock: { cidr: 10.155.208.112/32 } }]
       ports: [{ protocol: TCP, port: 80 }]
     - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.155.208.112/32] } }]
       ports: [{ protocol: TCP, port: 443 }]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata: { name: database-clients }
-spec:
-  podSelector:
-    matchExpressions: [{ key: component, operator: In, values: [migration, backup, bootstrap] }]
-  policyTypes: [Egress]
-  egress:
-    - to: [{ podSelector: { matchLabels: { app: postgres } } }]
-      ports: [{ protocol: TCP, port: 5432 }]
-    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
-      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata: { name: postgres }
-spec:
-  podSelector: { matchLabels: { app: postgres } }
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - { podSelector: { matchLabels: { app: build-portal } } }
-        - { podSelector: { matchLabels: { component: migration } } }
-        - { podSelector: { matchLabels: { component: backup } } }
-      ports: [{ protocol: TCP, port: 5432 }]

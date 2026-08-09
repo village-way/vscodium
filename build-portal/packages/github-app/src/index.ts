@@ -30,7 +30,11 @@ export async function installationToken(): Promise<string> {
 export async function github(): Promise<Octokit> { return new Octokit({ auth: await installationToken() }); }
 
 export async function gitCredentialToken(): Promise<string> {
-  return process.env.GITHUB_GIT_TOKEN || installationToken();
+  try { return await installationToken(); }
+  catch (error) {
+    if (process.env.GITHUB_GIT_TOKEN) return process.env.GITHUB_GIT_TOKEN;
+    throw error;
+  }
 }
 
 export async function assertRepositoryAccess(repositories: string[]): Promise<void> {

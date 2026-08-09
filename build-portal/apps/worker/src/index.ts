@@ -1,130 +1,319 @@
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
-import type pg from "pg";
-import { buildSpecSchema, resolveReleaseVersion, terminalPhases, type BuildPhase, type BuildSpec } from "@zhanlu/build-portal-contracts";
-import { appendBuildEvent, closePool, getPool } from "@zhanlu/build-portal-db";
-import { assertRepositoryAccess, github, installationToken, invalidateInstallationToken, startCredentialBroker } from "@zhanlu/build-portal-github-app";
-import { runRelease, type SourceRefs } from "@zhanlu/build-portal-release-runner";
-import { decideRecovery } from "./recovery.js";
+import { buildSpecSchema, confirmationHash, resolveReleaseVersion, type BuildPhase, type BuildSpec } from "@zhanlu/build-portal-contracts";
+import { appendBuildEvent, closeDatabase, getDatabase, id, now, parseJson, transaction } from "@zhanlu/build-portal-db";
+import { assertRepositoryAccess, github, installationToken, startCredentialBroker } from "@zhanlu/build-portal-github-app";
+import { runRelease, type SourceRefResult, type SourceRefs } from "@zhanlu/build-portal-release-runner";
 import { configureReleaseGitIdentity } from "./git-identity.js";
-import { extractReleaseUrl } from "./release-url.js";
-import { runnerPhase } from "./runner-phase.js";
-import { summarizeRuns, type RunObservation } from "./run-status.js";
-import { isAuthFailure, MonitorCoordinator, runMonitorWithRecovery } from "./monitor-recovery.js";
 
-const run = promisify(execFile); const WORKER_ID = process.env.WORKER_ID ?? hostname(); const VERSION = process.env.PORTAL_VERSION ?? "development"; const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/var/lib/zhanlu-build/workspace"; const PREPARE_LOCK = 0x5a4c524c; const POLL_MS = Number(process.env.WORKER_POLL_MS ?? 5000);
+const exec = promisify(execFile);
+const WORKER_ID = process.env.WORKER_ID ?? hostname();
+const VERSION = process.env.PORTAL_VERSION ?? "development";
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/var/lib/zhanlu-build/work";
+const GIT_CACHE_ROOT = process.env.GIT_CACHE_ROOT ?? "/var/lib/zhanlu-build/git-cache";
+const POLL_MS = Number(process.env.WORKER_POLL_MS ?? 3000);
+const LEASE_MS = 10 * 60_000;
+const componentRepositories = ["zhanlu-cloud", "zhanlu-code", "zhanlu-core", "zhanlu-loc", "zhanlu-vs"] as const;
+const buildRepositories = ["zhanlu-code", "zhanlu-core", "zhanlu-vs"] as const;
 const workflowByPlatform = { macos: "stable-macos.yml", linux: "stable-linux.yml", windows: "stable-windows.yml" } as const;
-const monitorCoordinator = new MonitorCoordinator();
-type BuildRow = { id: string; request_id: string; spec: unknown; resolved: Record<string, unknown> | null; phase: BuildPhase; cancel_requested_at: Date | null };
 
-type RepositoryUrls=string|{github?:string;gitlab?:string};
-function repositoryConfig(): Record<string, RepositoryUrls> { const raw = process.env.REPOSITORIES_JSON; if (!raw) throw new Error("REPOSITORIES_JSON is required"); return JSON.parse(raw) as Record<string,RepositoryUrls>; }
-function checkoutUrl(name:string):string{const value=repositoryConfig()[name];const url=typeof value==="string"?value:name==="vscodium"?value?.github:value?.gitlab??value?.github;if(!url)throw new Error(`repository URL missing for ${name}`);return url;}
-async function git(args: string[], cwd?: string) { return run("git", args, { cwd, env: process.env, maxBuffer: 10 * 1024 * 1024 }); }
-async function setPhase(id: string, phase: BuildPhase, reason?: string): Promise<void> { await getPool().query("UPDATE builds SET phase=$2,phase_reason=$3,updated_at=now(),lease_expires_at=now()+interval '90 seconds' WHERE id=$1", [id, phase, reason ?? null]); await appendBuildEvent(id, "phase.changed", { phase, reason }); }
+type RepositoryUrls = string | { github?: string; gitlab?: string };
+type BuildRow = {
+  id: string;
+  request_id: string;
+  spec: BuildSpec;
+  resolved: Record<string, unknown>;
+  phase: BuildPhase;
+};
 
-function sourceRefsFromResolved(resolved: Record<string, unknown> | null): SourceRefs | undefined {
-  const value = resolved?.sourceRefs;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const refs = value as SourceRefs;
-  for (const repository of ["zhanlu-code", "zhanlu-core", "zhanlu-vs"]) {
-    const item = refs[repository];
-    if (!item || !/^[0-9a-f]{40}$/.test(item.gitlabSha ?? "")) return undefined;
+function repositoryConfig(): Record<string, RepositoryUrls> {
+  const raw = process.env.REPOSITORIES_JSON;
+  if (!raw) throw new Error("REPOSITORIES_JSON is required");
+  const value = JSON.parse(raw) as Record<string, RepositoryUrls>;
+  for (const name of ["vscodium", ...componentRepositories]) if (!value[name]) throw new Error(`repository URL missing for ${name}`);
+  return value;
+}
+
+function repositoryUrl(name: string, provider: "github" | "gitlab"): string {
+  const value = repositoryConfig()[name];
+  const url = typeof value === "string" ? value : value?.[provider];
+  if (!url) throw new Error(`${provider} URL missing for ${name}`);
+  return url;
+}
+
+async function git(args: string[], cwd?: string): Promise<string> {
+  const result = await exec("git", args, { cwd, env: process.env, maxBuffer: 16 * 1024 * 1024 });
+  return result.stdout.trim();
+}
+
+function selectedPlatforms(spec: BuildSpec): Array<keyof typeof workflowByPlatform> {
+  return spec.platform === "all" ? ["macos", "linux", "windows"] : [spec.platform];
+}
+
+function rowFromDatabase(row: Record<string, unknown>): BuildRow {
+  return {
+    id: String(row.id),
+    request_id: String(row.request_id),
+    spec: buildSpecSchema.parse(parseJson(row.spec, {})),
+    resolved: parseJson(row.resolved, {}),
+    phase: row.phase as BuildPhase,
+  };
+}
+
+export function claimBuild(): BuildRow | null {
+  return transaction((database) => {
+    const candidate = database.prepare(`
+      SELECT * FROM builds
+      WHERE phase IN ('preview_queued','previewing','queued','source_sync','preflight','dispatching')
+        AND (lease_expires_at IS NULL OR lease_expires_at < ?)
+      ORDER BY created_at
+      LIMIT 1
+    `).get(now()) as Record<string, unknown> | undefined;
+    if (!candidate) return null;
+    const changed = database.prepare("UPDATE builds SET lease_owner=?,lease_expires_at=?,updated_at=? WHERE id=? AND (lease_expires_at IS NULL OR lease_expires_at<?)")
+      .run(WORKER_ID, now() + LEASE_MS, now(), String(candidate.id), now());
+    return changed.changes === 1 ? rowFromDatabase(candidate) : null;
+  });
+}
+
+function setPhase(buildId: string, phase: BuildPhase, reason?: string): void {
+  getDatabase().prepare("UPDATE builds SET phase=?,phase_reason=?,lease_expires_at=?,updated_at=? WHERE id=?")
+    .run(phase, reason ?? null, now() + LEASE_MS, now(), buildId);
+  appendBuildEvent(buildId, "phase.changed", { phase, reason });
+}
+
+function storeResolved(buildId: string, resolved: Record<string, unknown>, hash?: string): void {
+  getDatabase().prepare("UPDATE builds SET resolved=?,confirmation_hash=COALESCE(?,confirmation_hash),updated_at=? WHERE id=?")
+    .run(JSON.stringify(resolved), hash ?? null, now(), buildId);
+}
+
+function storePreview(buildId: string, spec: BuildSpec, resolved: Record<string, unknown>, hash: string): void {
+  getDatabase().prepare("UPDATE builds SET spec=?,resolved=?,confirmation_hash=?,updated_at=? WHERE id=?")
+    .run(JSON.stringify(spec), JSON.stringify(resolved), hash, now(), buildId);
+}
+
+function isDevelop(ref: string): boolean { return ref === "develop" || ref === "refs/heads/develop"; }
+
+export function portalSyncArguments(spec: BuildSpec, planFile: string): string[] {
+  const args = ["./scripts/sync-zhanlu-selected-refs.sh", "--dry-run"];
+  for (const repository of componentRepositories) args.push("--ref", `${repository}=develop`);
+  const selected: Array<[string, string]> = [
+    ["zhanlu-code", spec.sourceBranch],
+    ["zhanlu-core", spec.zhanluCoreRef],
+    ["zhanlu-vs", spec.zhanluVsRef],
+  ];
+  for (const [repository, ref] of selected) if (!isDevelop(ref)) args.push("--ref", `${repository}=${ref}`);
+  args.push("--output-plan", planFile);
+  return args;
+}
+
+export function parseSourcePlan(contents: string, spec: BuildSpec): { mirrorPlan: SourceRefResult[]; sourceRefs: SourceRefs } {
+  const mirrorPlan = contents.trim().split("\n").filter(Boolean).map((line, index) => {
+    const fields = line.split("\t");
+    if (fields.length !== 9) throw new Error(`invalid source plan row ${index + 1}`);
+    const [repository, refType, requestedRef, sourceRef, destinationRef, gitlabObjectSha, gitlabSha, previous, action] = fields as [string, string, string, string, string, string, string, string, string];
+    if (!componentRepositories.includes(repository as typeof componentRepositories[number])) throw new Error(`unexpected repository in source plan: ${repository}`);
+    if (!/^[0-9a-f]{40}$/.test(gitlabObjectSha) || !/^[0-9a-f]{40}$/.test(gitlabSha)) throw new Error(`invalid GitLab SHA for ${repository}`);
+    if (previous !== "-" && !/^[0-9a-f]{40}$/.test(previous)) throw new Error(`invalid GitHub lease for ${repository}`);
+    return { repository, refType, requestedRef, sourceRef, destinationRef, gitlabSha, gitlabObjectSha, previousGithubSha: previous === "-" ? "" : previous, action };
+  });
+  const develop = new Set(mirrorPlan.filter((item) => item.destinationRef === "refs/heads/develop").map((item) => item.repository));
+  if (develop.size !== 5 || componentRepositories.some((repository) => !develop.has(repository))) throw new Error("source plan does not contain all five develop refs");
+  const requested: Record<string, string> = { "zhanlu-code": spec.sourceBranch, "zhanlu-core": spec.zhanluCoreRef, "zhanlu-vs": spec.zhanluVsRef };
+  const sourceRefs: SourceRefs = {};
+  for (const repository of buildRepositories) {
+    const matches = mirrorPlan.filter((item) => item.repository === repository && (item.requestedRef === requested[repository] || (isDevelop(requested[repository]!) && item.destinationRef === "refs/heads/develop")));
+    if (matches.length !== 1) throw new Error(`source plan did not resolve exactly one ${repository} build ref`);
+    sourceRefs[repository] = matches[0]!;
   }
-  return refs;
+  const destinations = mirrorPlan.map((item) => `${item.repository}\0${item.destinationRef}`);
+  if (new Set(destinations).size !== destinations.length) throw new Error("source plan contains duplicate destination refs");
+  return { mirrorPlan, sourceRefs };
 }
 
-async function persistSourceRefs(buildId: string, sourceRefs: SourceRefs): Promise<void> {
-  await getPool().query(
-    "UPDATE builds SET resolved=coalesce(resolved,'{}'::jsonb)||jsonb_build_object('sourceRefs',$2::jsonb),updated_at=now() WHERE id=$1",
-    [buildId, JSON.stringify(sourceRefs)],
-  );
+async function prepareBareCache(name: string, provider: "github" | "gitlab", branch: string): Promise<string> {
+  await mkdir(GIT_CACHE_ROOT, { recursive: true });
+  const cache = path.join(GIT_CACHE_ROOT, `${name}.git`);
+  try { await git([`--git-dir=${cache}`, "rev-parse", "--is-bare-repository"]); }
+  catch { await git(["init", "--bare", cache]); }
+  const url = repositoryUrl(name, provider);
+  const remote = provider === "github" && name === "vscodium" ? "origin" : provider;
+  try { await git([`--git-dir=${cache}`, "remote", "set-url", remote, url]); }
+  catch { await git([`--git-dir=${cache}`, "remote", "add", remote, url]); }
+  if (provider === "gitlab") {
+    try { await git([`--git-dir=${cache}`, "remote", "set-url", "origin", url]); }
+    catch { await git([`--git-dir=${cache}`, "remote", "add", "origin", url]); }
+  }
+  await git([`--git-dir=${cache}`, "worktree", "prune", "--expire=now"]);
+  await git([`--git-dir=${cache}`, "fetch", "--force", "--no-tags", remote, `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+  return cache;
 }
 
-async function ensureCheckout(name: string, branch: string): Promise<void> {
-  const url = checkoutUrl(name); const path = `${WORKSPACE_ROOT}/${name}`;
-  await mkdir(WORKSPACE_ROOT, { recursive: true });
-  try { await git(["-C", path, "rev-parse", "--git-dir"]); } catch { await git(["clone", "--origin", "origin", "--branch", branch, "--single-branch", url, path]); }
-  const status = (await git(["-C", path, "status", "--porcelain"])).stdout.trim(); if (status) throw new Error(`dedicated checkout is dirty: ${name}`);
-  await git(["-C", path, "fetch", "--prune", "origin", branch]); await git(["-C", path, "checkout", branch]);
-  const head = (await git(["-C", path, "rev-parse", "HEAD"])).stdout.trim(); const remote = (await git(["-C", path, "rev-parse", `origin/${branch}`])).stdout.trim(); if (head !== remote) await git(["-C", path, "merge", "--ff-only", `origin/${branch}`]); const finalHead=(await git(["-C",path,"rev-parse","HEAD"])).stdout.trim();if(finalHead!==remote)throw new Error(`${name} must equal origin/${branch}: HEAD=${finalHead} remote=${remote}`);
-  await configureReleaseGitIdentity(path);
+type PreparedWorkspace = { root: string; worktrees: Array<{ cache: string; directory: string }> };
+
+async function prepareWorkspace(build: BuildRow): Promise<PreparedWorkspace> {
+  const root = path.join(WORKSPACE_ROOT, build.request_id);
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root, { recursive: true });
+  const worktrees: PreparedWorkspace["worktrees"] = [];
+  const add = async (name: string, provider: "github" | "gitlab", branch: string) => {
+    const cache = await prepareBareCache(name, provider, branch);
+    const directory = path.join(root, name);
+    await git([`--git-dir=${cache}`, "worktree", "add", "--force", "-B", branch, directory, `refs/remotes/origin/${branch}`]);
+    worktrees.push({ cache, directory });
+  };
+  await add("vscodium", "github", "master");
+  await configureReleaseGitIdentity(path.join(root, "vscodium"));
+  if (build.spec.kind === "formal" && build.spec.syncGitLab) {
+    for (const repository of componentRepositories) await add(repository, "gitlab", "develop");
+  }
+  return { root, worktrees };
 }
 
-async function prepareWorkspace(spec: BuildSpec): Promise<void> { const githubRepos=Object.values(repositoryConfig()).flatMap((value)=>{const urls=typeof value==="string"?[value]:[value.github].filter((item):item is string=>Boolean(item));return urls.flatMap((url)=>{try{const parsed=new URL(url);if(parsed.hostname!=="github.com")return[];return[parsed.pathname.replace(/^\//,"").replace(/\.git$/,"")];}catch{return[];}});});await assertRepositoryAccess(githubRepos);await ensureCheckout("vscodium", "master"); if (spec.kind === "formal" && spec.syncGitLab && !spec.triggerOnly) for (const name of ["zhanlu-cloud","zhanlu-code","zhanlu-core","zhanlu-loc","zhanlu-vs"]) await ensureCheckout(name, "develop"); }
-
-async function claim(): Promise<BuildRow | null> {
-  const result = await getPool().query<BuildRow>(`WITH candidate AS (SELECT id FROM builds WHERE phase IN ('queued','source_sync_preview','source_sync','preflight','release_prepare','dispatching','running') AND (lease_expires_at IS NULL OR lease_expires_at<now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE builds b SET lease_owner=$1,lease_expires_at=now()+interval '90 seconds',updated_at=now() FROM candidate c WHERE b.id=c.id RETURNING b.*`, [WORKER_ID]); return result.rows[0] ?? null;
+async function cleanWorkspace(prepared: PreparedWorkspace): Promise<void> {
+  for (const worktree of prepared.worktrees.reverse()) {
+    await git([`--git-dir=${worktree.cache}`, "worktree", "remove", "--force", worktree.directory]).catch(() => undefined);
+    await git([`--git-dir=${worktree.cache}`, "worktree", "prune", "--expire=now"]).catch(() => undefined);
+  }
+  await rm(prepared.root, { recursive: true, force: true });
 }
 
-async function acquirePrepareLock(): Promise<pg.PoolClient> { const client = await getPool().connect(); await client.query("SELECT pg_advisory_lock($1)", [PREPARE_LOCK]); return client; }
-async function releasePrepareLock(client: pg.PoolClient): Promise<void> { try { await client.query("SELECT pg_advisory_unlock($1)", [PREPARE_LOCK]); } finally { client.release(); } }
-
-function selectedPlatforms(spec: BuildSpec): Array<keyof typeof workflowByPlatform> { return spec.platform === "all" ? ["macos","linux","windows"] : [spec.platform]; }
-
-async function saveRuns(build: BuildRow, runs: Array<{workflow:string;runId:number;url:string}>): Promise<void> {
-  for (const item of runs) { const platform = Object.entries(workflowByPlatform).find(([,workflow]) => workflow === item.workflow)?.[0]; if (!platform) throw new Error(`unknown workflow ${item.workflow}`); await getPool().query("INSERT INTO build_runs(build_id,platform,workflow,run_id,run_url,status,dispatch_attempts) VALUES($1,$2,$3,$4,$5,'queued',1) ON CONFLICT(build_id,platform) DO UPDATE SET run_id=excluded.run_id,run_url=excluded.run_url,status='queued',conclusion=NULL,dispatch_attempts=build_runs.dispatch_attempts+1,updated_at=now()", [build.id,platform,item.workflow,String(item.runId),item.url]); }
+async function previewBuild(build: BuildRow): Promise<void> {
+  setPhase(build.id, "previewing");
+  const prepared = await prepareWorkspace(build);
+  try {
+    const planFile = path.join(prepared.root, ".portal-source-plan.tsv");
+    await exec("bash", portalSyncArguments(build.spec, planFile), { cwd: path.join(prepared.root, "vscodium"), env: process.env, maxBuffer: 16 * 1024 * 1024 });
+    const planTsv = await readFile(planFile, "utf8");
+    const parsed = parseSourcePlan(planTsv, build.spec);
+    const version = resolveReleaseVersion(build.spec);
+    const pinnedSpec = buildSpecSchema.parse({ ...build.spec, timePatch: version.timePatch });
+    const resolved = { ...build.resolved, ...version, sourceRefs: parsed.sourceRefs, mirrorPlan: parsed.mirrorPlan, syncPlanTsv: planTsv, previewedAt: new Date().toISOString() };
+    const secret = process.env.CONFIRMATION_SECRET;
+    if (!secret) throw new Error("CONFIRMATION_SECRET is required");
+    const hash = confirmationHash({ spec: pinnedSpec, resolved }, secret);
+    storePreview(build.id, pinnedSpec, resolved, hash);
+    setPhase(build.id, "awaiting_confirmation");
+  } finally {
+    await cleanWorkspace(prepared);
+  }
 }
 
-async function findRunsByRequest(build: BuildRow, platforms: Array<keyof typeof workflowByPlatform>): Promise<Array<{workflow:string;runId:number;url:string}>> {
-  const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPOSITORY_NAME ?? "vscodium"; if (!owner) throw new Error("GITHUB_OWNER is required"); const client = await github(); const found: Array<{workflow:string;runId:number;url:string}> = [];
-  for (const platform of platforms) { const workflow = workflowByPlatform[platform]; const response = await client.actions.listWorkflowRuns({ owner, repo, workflow_id: workflow, event: "workflow_dispatch", per_page: 30 }); const matches = response.data.workflow_runs.filter((item) => item.display_title?.includes(build.request_id)); if (matches.length > 1) throw new Error(`ambiguous runs for ${workflow}`); if (matches[0]) found.push({ workflow, runId: matches[0].id, url: matches[0].html_url }); }
+function saveRuns(build: BuildRow, runs: Array<{ workflow: string; runId: number; url: string }>): void {
+  const expected = selectedPlatforms(build.spec);
+  if (runs.length !== expected.length) throw new Error(`expected ${expected.length} workflow runs, received ${runs.length}`);
+  const timestamp = now();
+  for (const item of runs) {
+    const platform = Object.entries(workflowByPlatform).find(([, workflow]) => workflow === item.workflow)?.[0];
+    if (!platform || !expected.includes(platform as typeof expected[number])) throw new Error(`unexpected workflow ${item.workflow}`);
+    getDatabase().prepare(`INSERT INTO build_runs(id,build_id,platform,workflow,run_id,run_url,status,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(build_id,platform) DO UPDATE SET workflow=excluded.workflow,run_id=excluded.run_id,run_url=excluded.run_url,status=excluded.status,updated_at=excluded.updated_at`)
+      .run(id(), build.id, platform, item.workflow, String(item.runId), item.url, "dispatched", timestamp, timestamp);
+  }
+}
+
+async function discoverRuns(build: BuildRow): Promise<Array<{ workflow: string; runId: number; url: string }>> {
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPOSITORY_NAME ?? "vscodium";
+  if (!owner) throw new Error("GITHUB_OWNER is required");
+  const client = await github();
+  const found: Array<{ workflow: string; runId: number; url: string }> = [];
+  for (const platform of selectedPlatforms(build.spec)) {
+    const workflow = workflowByPlatform[platform];
+    const response = await client.actions.listWorkflowRuns({ owner, repo, workflow_id: workflow, event: "workflow_dispatch", per_page: 50 });
+    const matches = response.data.workflow_runs.filter((item) => item.display_title?.includes(build.request_id));
+    if (matches.length > 1) throw new Error(`ambiguous workflow attribution for ${workflow}`);
+    if (matches[0]) found.push({ workflow, runId: matches[0].id, url: matches[0].html_url });
+  }
   return found;
 }
 
-async function dispatch(build: BuildRow, spec: BuildSpec): Promise<void> {
-  const token=await installationToken();process.env.GH_TOKEN=token;process.env.GITHUB_TOKEN=token;
-  let persistedSourceRefs=sourceRefsFromResolved(build.resolved);let observed:BuildPhase|undefined;const log=async(line:string)=>{const phase=runnerPhase(line);if(phase&&phase!==observed){observed=phase;await setPhase(build.id,phase);}if(line.startsWith("{")){try{const value=JSON.parse(line) as {event?:string;sourceRefs?:SourceRefs};if(value.event==="source_refs_resolved"&&value.sourceRefs){persistedSourceRefs=value.sourceRefs;await persistSourceRefs(build.id,value.sourceRefs);}}catch{/* ordinary JSON log */}}const releaseUrl=extractReleaseUrl(line);if(releaseUrl)await getPool().query("UPDATE builds SET release_url=$2,updated_at=now() WHERE id=$1",[build.id,releaseUrl]);};
-  const existing = await getPool().query<{platform:string;run_id:string|null}>("SELECT platform,run_id FROM build_runs WHERE build_id=$1", [build.id]); const persisted=existing.rows.filter((row)=>row.run_id).map((row)=>row.platform);const selected=selectedPlatforms(spec);const initiallyMissing=selected.filter((platform)=>!persisted.includes(platform));const discovered:Record<string,number>={};
-  if (["dispatching","running"].includes(build.phase)&&initiallyMissing.length) { const recovered = await findRunsByRequest(build, initiallyMissing); await saveRuns(build,recovered); for(const item of recovered){const platform=Object.entries(workflowByPlatform).find(([,workflow])=>workflow===item.workflow)?.[0];if(platform)discovered[platform]=1;} }
-  const decision=decideRecovery({phase:build.phase,selected,persisted,discovered});if(decision.mode==="needs-attention")throw new Error(`ambiguous workflow attribution: ${decision.reason}`);if(decision.mode==="monitor")return;
-  if(decision.mode==="full"){const result=await runRelease(spec,build.request_id,{workspace:WORKSPACE_ROOT,apply:true,onLog:log});if(result.sourceRefs){persistedSourceRefs=result.sourceRefs;await persistSourceRefs(build.id,result.sourceRefs);}await saveRuns(build,result.runs);return;}
-  if(!persistedSourceRefs)throw new Error("persisted source refs are required for platform retry");
-  for (const platform of decision.platforms) { const result = await runRelease({ ...spec, platform:platform as keyof typeof workflowByPlatform, triggerOnly: true }, build.request_id, { workspace: WORKSPACE_ROOT, apply: true, sourceRefs:persistedSourceRefs, onLog: log }); await saveRuns(build,result.runs); }
+async function recoverDispatch(build: BuildRow): Promise<void> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const runs = await discoverRuns(build);
+    if (runs.length === selectedPlatforms(build.spec).length) {
+      saveRuns(build, runs);
+      setPhase(build.id, "succeeded", "GitHub Actions dispatched");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+  }
+  throw new Error("dispatch recovery could not attribute every selected workflow; refusing to dispatch duplicates");
 }
 
-async function monitor(build: BuildRow): Promise<void> {
-  const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPOSITORY_NAME ?? "vscodium"; if (!owner) throw new Error("GITHUB_OWNER is required"); const client = await github();
-  while (true) { const cancellation = await getPool().query<{cancel_requested_at:Date|null}>("SELECT cancel_requested_at FROM builds WHERE id=$1",[build.id]); const runs = await getPool().query<{id:string;platform:string;run_id:string;status:string}>("SELECT id,platform,run_id,status FROM build_runs WHERE build_id=$1",[build.id]); const observations: RunObservation[] = [];
-    for (const item of runs.rows) {
-      if (cancellation.rows[0]?.cancel_requested_at && item.status !== "completed") await client.actions.cancelWorkflowRun({owner,repo,run_id:Number(item.run_id)}).catch(() => undefined);
-      const detail = await client.actions.getWorkflowRun({owner,repo,run_id:Number(item.run_id)});
-      const status=detail.data.status ?? "unknown"; const conclusion=detail.data.conclusion;
-      await getPool().query("UPDATE build_runs SET status=$2,conclusion=$3,run_url=$4,updated_at=now() WHERE id=$1",[item.id,status,conclusion,detail.data.html_url]);
-      observations.push({ platform: item.platform, runId: item.run_id, status, conclusion: conclusion ?? null });
+async function dispatchBuild(build: BuildRow): Promise<void> {
+  if (build.phase === "dispatching") return recoverDispatch(build);
+  const planTsv = typeof build.resolved.syncPlanTsv === "string" ? build.resolved.syncPlanTsv : "";
+  const sourceRefs = build.resolved.sourceRefs as SourceRefs | undefined;
+  if (!planTsv || !sourceRefs) throw new Error("confirmed source plan is missing");
+  const prepared = await prepareWorkspace(build);
+  try {
+    const planFile = path.join(prepared.root, ".confirmed-source-plan.tsv");
+    await writeFile(planFile, planTsv, { mode: 0o600 });
+    const token = await installationToken();
+    process.env.GH_TOKEN = token;
+    process.env.GITHUB_TOKEN = token;
+    setPhase(build.id, "source_sync");
+    const result = await runRelease(build.spec, build.request_id, {
+      workspace: prepared.root,
+      apply: true,
+      confirmedSourcePlan: planFile,
+      sourceRefs,
+      onLog: async (line) => {
+        if (line.startsWith("Preflight vscodium:")) setPhase(build.id, "preflight");
+        if (line.startsWith("Dispatching stable workflow")) setPhase(build.id, "dispatching");
+        const release = line.match(/GitHub Release \([^)]*\): (https:\/\/\S+)/)?.[1];
+        if (release) getDatabase().prepare("UPDATE builds SET release_url=?,updated_at=? WHERE id=?").run(release, now(), build.id);
+      },
+    });
+    saveRuns(build, result.runs);
+    setPhase(build.id, "succeeded", "GitHub Actions dispatched");
+  } catch (error) {
+    const recovered = await discoverRuns(build).catch(() => []);
+    if (recovered.length === selectedPlatforms(build.spec).length) {
+      saveRuns(build, recovered);
+      setPhase(build.id, "succeeded", "GitHub Actions dispatched; result recovered after runner error");
+      return;
     }
-    const summary = summarizeRuns(observations, Boolean(cancellation.rows[0]?.cancel_requested_at));
-    if (summary.terminalPhase) { await setPhase(build.id,summary.terminalPhase,summary.reason); return; }
-    await getPool().query("UPDATE builds SET lease_expires_at=now()+interval '90 seconds' WHERE id=$1",[build.id]); await new Promise((resolve)=>setTimeout(resolve,30_000));
+    throw error;
+  } finally {
+    await cleanWorkspace(prepared);
   }
 }
 
-function monitorWithRecovery(build: BuildRow): void {
-  monitorCoordinator.start(
-    build.id,
-    () => runMonitorWithRecovery(
-      () => monitor(build),
-      async (error) => {
-        if (isAuthFailure(error)) invalidateInstallationToken();
-      },
-    ),
-    async (error) => {
-      const reason = error instanceof Error ? error.message : "unknown monitor error";
-      console.error(`monitor failed for build ${build.id}`, reason);
-      await setPhase(build.id, "needs_attention", `monitor failed: ${reason}`);
-    },
-  );
+async function processBuild(build: BuildRow): Promise<void> {
+  try {
+    if (build.phase === "preview_queued" || build.phase === "previewing") await previewBuild(build);
+    else await dispatchBuild(build);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown worker error";
+    console.error(`build ${build.id} failed: ${reason}`);
+    setPhase(build.id, "failed", reason);
+  }
 }
 
-async function processBuild(build: BuildRow): Promise<void> { const parsed=buildSpecSchema.parse(build.spec); if(build.phase==="running"){monitorWithRecovery(build);return;} let lock:pg.PoolClient|undefined; try { lock=await acquirePrepareLock(); if(build.phase!=="dispatching")await prepareWorkspace(parsed);const resolved=build.resolved ?? {...resolveReleaseVersion(parsed),platforms:selectedPlatforms(parsed)};const spec=parsed.timePatch?parsed:{...parsed,timePatch:String(resolved.timePatch)};await getPool().query("UPDATE builds SET resolved=$2::jsonb,spec=$3::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved),JSON.stringify(spec)]);if(build.phase==="queued")await setPhase(build.id,sourceRefsFromResolved(resolved)?"preflight":"source_sync_preview");await dispatch(build,spec); await setPhase(build.id,"running"); } catch(error) { const reason=error instanceof Error?error.message:"unknown";await setPhase(build.id,reason.includes("ambiguous")||reason.includes("persisted source refs")?"needs_attention":"failed",reason); return; } finally { if(lock) await releasePrepareLock(lock); } monitorWithRecovery(build); }
+async function main(): Promise<void> {
+  await mkdir(WORKSPACE_ROOT, { recursive: true });
+  await mkdir(GIT_CACHE_ROOT, { recursive: true });
+  await startCredentialBroker();
+  const githubRepositories = Object.values(repositoryConfig()).flatMap((value) => {
+    const url = typeof value === "string" ? value : value.github;
+    if (!url) return [];
+    try { const parsed = new URL(url); return parsed.hostname === "github.com" ? [parsed.pathname.replace(/^\//, "").replace(/\.git$/, "")] : []; } catch { return []; }
+  });
+  await assertRepositoryAccess(githubRepositories);
+  console.log(`worker ${WORKER_ID} started (${VERSION}) with ${githubRepositories.length} GitHub repositories`);
+  while (true) {
+    const build = claimBuild();
+    if (build) await processBuild(build);
+    else await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
+}
 
-async function processMockBuild(build: BuildRow): Promise<void>{const spec=buildSpecSchema.parse(build.spec);const resolved=build.resolved??{...resolveReleaseVersion(spec),platforms:selectedPlatforms(spec)};await setPhase(build.id,"preflight");await getPool().query("UPDATE builds SET resolved=$2::jsonb WHERE id=$1",[build.id,JSON.stringify(resolved)]);await setPhase(build.id,"dispatching");for(const platform of selectedPlatforms(spec))await getPool().query("INSERT INTO build_runs(build_id,platform,workflow,run_id,run_url,status,conclusion,dispatch_attempts) VALUES($1,$2,$3,$4,$5,'completed','success',1) ON CONFLICT(build_id,platform) DO UPDATE SET status='completed',conclusion='success',updated_at=now()",[build.id,platform,workflowByPlatform[platform],`mock-${build.request_id}-${platform}`,`https://example.invalid/mock/${build.request_id}/${platform}`]);await setPhase(build.id,"succeeded","mock executor");}
-
-async function refreshRefs(): Promise<void> { const config=repositoryConfig();for(const [repository,value] of Object.entries(config)){const providers=typeof value==="string"?[[value.includes("gitlab")?"gitlab":"github",value] as const]:Object.entries(value);for(const ref of ["develop","master"]){const observed:Array<{provider:string;sha:string}>=[];for(const [provider,url] of providers){if(!url)continue;try{const {stdout}=await git(["ls-remote","--heads",url,ref]);const sha=stdout.trim().split(/\s+/)[0];if(sha)observed.push({provider,sha});}catch{/* not every repo has both defaults */}}const syncStatus=observed.length>1?(new Set(observed.map((item)=>item.sha)).size===1?"in_sync":"diverged"):"single_provider";for(const item of observed)await getPool().query("INSERT INTO ref_snapshots(repository,provider,ref,sha,sync_status) VALUES($1,$2,$3,$4,$5)",[repository,item.provider,ref,item.sha,syncStatus]);}}}
-let lastRefRefresh=0; async function heartbeat():Promise<void>{await getPool().query("INSERT INTO workers(id,version,heartbeat_at) VALUES($1,$2,now()) ON CONFLICT(id) DO UPDATE SET version=excluded.version,heartbeat_at=now()",[WORKER_ID,VERSION]);}
-async function refRefreshRequested():Promise<boolean>{const result=await getPool().query<{requested_at:Date|null}>("SELECT max(created_at) AS requested_at FROM audit_events WHERE action='refs.refresh.requested'");return Boolean(result.rows[0]?.requested_at&&result.rows[0].requested_at.getTime()>lastRefRefresh);}
-let lastDailySync=""; async function maybeDailySync(now=new Date()):Promise<void>{const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Tokyo",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(now);const value=Object.fromEntries(parts.map((part)=>[part.type,part.value]));const date=`${value.year}-${value.month}-${value.day}`;if(value.hour!=="01"||value.minute!=="05"||lastDailySync===date)return;const lock=await acquirePrepareLock();try{await ensureCheckout("vscodium","master");const cwd=`${WORKSPACE_ROOT}/vscodium`;await run("bash",["./scripts/sync-zhanlu-gitlab-to-github.sh","--dry-run"],{cwd,env:process.env});await run("bash",["./scripts/sync-zhanlu-gitlab-to-github.sh"],{cwd,env:process.env});lastDailySync=date;console.log(`default-branch sync completed for ${date}`);}finally{await releasePrepareLock(lock);}}
-async function main(){const mock=process.env.EXECUTOR_MODE==="mock";if(!mock)await startCredentialBroker();console.log(`worker ${WORKER_ID} started (${mock?"mock":"real"})`);while(true){try{await heartbeat();if(!mock){await maybeDailySync();if(Date.now()-lastRefRefresh>10*60_000||await refRefreshRequested()){await refreshRefs();lastRefRefresh=Date.now();}}const build=await claim();if(build)await(mock?processMockBuild(build):processBuild(build));else await new Promise((resolve)=>setTimeout(resolve,POLL_MS));}catch(error){console.error("worker loop failed",error instanceof Error?error.message:"unknown");await new Promise((resolve)=>setTimeout(resolve,POLL_MS));}}}
-const shutdown=async()=>{await closePool();process.exit(0)};process.on("SIGTERM",shutdown);process.on("SIGINT",shutdown);if(process.env.NODE_ENV!=="test")void main();
+const shutdown = () => { closeDatabase(); process.exit(0); };
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
+if (process.env.NODE_ENV !== "test") void main();

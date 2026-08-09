@@ -11,10 +11,16 @@ test("installation token broker fails closed without app configuration", async (
   if (saved.installation) process.env.GITHUB_APP_INSTALLATION_ID = saved.installation;
 });
 
-test("git credential token can use a workflow-capable token", async () => {
+test("git credential token falls back to a workflow-capable token when app auth is unavailable", async () => {
   const saved = process.env.GITHUB_GIT_TOKEN;
+  const savedApp = process.env.GITHUB_APP_ID;
+  const savedInstallation = process.env.GITHUB_APP_INSTALLATION_ID;
+  delete process.env.GITHUB_APP_ID;
+  delete process.env.GITHUB_APP_INSTALLATION_ID;
   process.env.GITHUB_GIT_TOKEN = "workflow-capable-token";
   assert.equal(await gitCredentialToken(), "workflow-capable-token");
+  if (savedApp) process.env.GITHUB_APP_ID = savedApp;
+  if (savedInstallation) process.env.GITHUB_APP_INSTALLATION_ID = savedInstallation;
   if (saved) process.env.GITHUB_GIT_TOKEN = saved;
   else delete process.env.GITHUB_GIT_TOKEN;
 });

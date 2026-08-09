@@ -1,9 +1,9 @@
 apiVersion: batch/v1
 kind: CronJob
-metadata: { name: postgres-backup }
+metadata: { name: sqlite-backup }
 spec:
   schedule: "30 2 * * *"
-  timeZone: Asia/Tokyo
+  timeZone: Asia/Shanghai
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -11,16 +11,21 @@ spec:
     spec:
       backoffLimit: 2
       template:
-        metadata: { labels: { app: build-portal, component: backup } }
+        metadata: { labels: { app: build-portal, component: backup, architecture: sqlite } }
         spec:
           restartPolicy: OnFailure
           automountServiceAccountToken: false
+          nodeSelector: { kubernetes.io/hostname: pve-nas }
           securityContext: { seccompProfile: { type: RuntimeDefault }, fsGroup: 10001 }
           containers:
-            - name: pg-dump
-              image: postgres:16.10-bookworm
-              command: [bash, -ceu, 'stamp=$(date -u +%Y%m%dT%H%M%SZ); pg_dump --format=custom --file="/backup/zhanlu-build-${stamp}.dump" "${DATABASE_URL}"; find /backup -type f -name "*.dump" -mtime +13 -delete']
-              env: [{ name: DATABASE_URL, valueFrom: { secretKeyRef: { name: build-portal-db, key: url } } }]
-              securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
-              volumeMounts: [{ name: backup, mountPath: /backup }]
-          volumes: [{ name: backup, persistentVolumeClaim: { claimName: postgres-backup } }]
+            - name: sqlite-backup
+              image: SET_IMAGE
+              command: [node, /app/dist/backup.mjs]
+              envFrom: [{ secretRef: { name: build-portal-runtime-sqlite } }]
+              env: [{ name: SQLITE_BACKUP_DIR, value: /var/lib/zhanlu-build/backups }, { name: SQLITE_BACKUP_RETENTION_DAYS, value: "14" }]
+              securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+              volumeMounts: [{ name: state, mountPath: /var/lib/zhanlu-build/state }, { name: backups, mountPath: /var/lib/zhanlu-build/backups }, { name: tmp, mountPath: /tmp }]
+          volumes:
+            - { name: state, hostPath: { path: /vol1/1000/k8s-build/build-portal/state, type: Directory } }
+            - { name: backups, hostPath: { path: /vol1/1000/k8s-build/build-portal/backups, type: Directory } }
+            - { name: tmp, emptyDir: {} }

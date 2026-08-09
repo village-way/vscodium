@@ -4,14 +4,19 @@ metadata: { name: build-portal-bootstrap-admin, namespace: zhanlu-build }
 spec:
   backoffLimit: 0
   template:
-    metadata: { labels: { app: build-portal, component: bootstrap } }
+    metadata: { labels: { app: build-portal, component: bootstrap, architecture: sqlite } }
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
-      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      nodeSelector: { kubernetes.io/hostname: pve-nas }
+      securityContext: { seccompProfile: { type: RuntimeDefault }, fsGroup: 10001 }
       containers:
         - name: bootstrap
-          image: 192.168.22.100:30002/zhanlu/build-portal-web:SET_GIT_SHA
-          command: [node, /tools/auth/dist/bootstrap.js]
-          envFrom: [{ secretRef: { name: build-portal-runtime } }, { secretRef: { name: build-portal-bootstrap } }]
+          image: SET_IMAGE
+          command: [node, /app/dist/bootstrap.mjs]
+          envFrom: [{ secretRef: { name: build-portal-runtime-sqlite } }, { secretRef: { name: build-portal-bootstrap } }]
           securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          volumeMounts: [{ name: state, mountPath: /var/lib/zhanlu-build/state }, { name: tmp, mountPath: /tmp }]
+      volumes:
+        - { name: state, hostPath: { path: /vol1/1000/k8s-build/build-portal/state, type: Directory } }
+        - { name: tmp, emptyDir: {} }

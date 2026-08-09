@@ -3,31 +3,67 @@ kind: Service
 metadata: { name: build-portal }
 spec:
   type: NodePort
-  selector: { app: build-portal, component: web }
+  selector: { app: build-portal, component: web, architecture: sqlite }
   ports: [{ name: https, port: 8443, targetPort: 8443, nodePort: 30443 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: build-portal-web }
+metadata: { name: build-portal }
 spec:
-  replicas: 2
-  selector: { matchLabels: { app: build-portal, component: web } }
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: build-portal, component: web, architecture: sqlite } }
   template:
-    metadata: { labels: { app: build-portal, component: web } }
+    metadata: { labels: { app: build-portal, component: web, architecture: sqlite } }
     spec:
       automountServiceAccountToken: false
-      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      nodeSelector: { kubernetes.io/hostname: pve-nas }
+      hostAliases: [{ ip: 10.155.208.112, hostnames: [gitlab.cmss.com] }]
+      securityContext: { seccompProfile: { type: RuntimeDefault }, fsGroup: 10001 }
+      initContainers:
+        - name: prepare-storage
+          image: SET_IMAGE
+          command: [/bin/sh, -ceu, "install -d -o 10001 -g 10001 -m 0750 /storage/state /storage/git-cache /storage/backups"]
+          securityContext: { runAsUser: 0, runAsGroup: 0, allowPrivilegeEscalation: false, capabilities: { drop: [ALL], add: [CHOWN, DAC_OVERRIDE, FOWNER] } }
+          volumeMounts: [{ name: state, mountPath: /storage/state }, { name: git-cache, mountPath: /storage/git-cache }, { name: backups, mountPath: /storage/backups }]
       containers:
         - name: web
-          image: zhanlu/build-portal-web
+          image: SET_IMAGE
+          command: [node, /app/apps/web/server.js]
           ports: [{ name: http, containerPort: 3000 }]
-          envFrom: [{ secretRef: { name: build-portal-runtime } }]
+          envFrom: [{ secretRef: { name: build-portal-runtime-sqlite } }]
           env: [{ name: APP_COMPONENT, value: web }, { name: HOSTNAME, value: 0.0.0.0 }]
           readinessProbe: { httpGet: { path: /api/health/ready, port: http }, initialDelaySeconds: 5, periodSeconds: 5 }
           livenessProbe: { httpGet: { path: /api/health/live, port: http }, periodSeconds: 15 }
           resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
-          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+          volumeMounts: [{ name: state, mountPath: /var/lib/zhanlu-build/state }, { name: tmp, mountPath: /tmp }]
+        - name: worker
+          image: SET_IMAGE
+          command: [node, /app/dist/worker.mjs]
+          envFrom: [{ secretRef: { name: build-portal-runtime-sqlite } }, { secretRef: { name: build-portal-worker-v2 } }]
+          env:
+            - { name: APP_COMPONENT, value: worker }
+            - { name: WORKSPACE_ROOT, value: /var/lib/zhanlu-build/work }
+            - { name: GIT_CACHE_ROOT, value: /var/lib/zhanlu-build/git-cache }
+            - { name: ZHANLU_SYNC_VOLUME_ROOT, value: /var/lib/zhanlu-build/git-cache }
+            - { name: ZHANLU_SYNC_EXTERNAL_STATE_ROOT, value: /var/lib/zhanlu-build/git-cache }
+            - { name: ZHANLU_SYNC_EXTERNAL_TMP_ROOT, value: /var/lib/zhanlu-build/work/sync-tmp }
+            - { name: ZHANLU_SYNC_EXTERNAL_CACHE_ROOT, value: /var/lib/zhanlu-build/git-cache }
+            - { name: ZHANLU_SYNC_LOCK_ROOT, value: /var/lib/zhanlu-build/work/sync-lock }
+            - { name: ZHANLU_SYNC_SKIP_MOUNT_CHECK, value: "1" }
+            - { name: RELEASE_GIT_USER_NAME, value: village-way }
+            - { name: RELEASE_GIT_USER_EMAIL, value: wandepen@163.com }
+            - { name: GIT_CONFIG_COUNT, value: "3" }
+            - { name: GIT_CONFIG_KEY_0, value: credential.https://github.com.helper }
+            - { name: GIT_CONFIG_VALUE_0, value: "!node /app/dist/credential-helper.mjs" }
+            - { name: GIT_CONFIG_KEY_1, value: credential.http://gitlab.cmss.com.helper }
+            - { name: GIT_CONFIG_VALUE_1, value: "!/usr/local/bin/zhanlu-gitlab-credential" }
+            - { name: GIT_CONFIG_KEY_2, value: safe.directory }
+            - { name: GIT_CONFIG_VALUE_2, value: "*" }
+          resources: { requests: { cpu: 200m, memory: 512Mi }, limits: { cpu: "2", memory: 2Gi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          volumeMounts: [{ name: state, mountPath: /var/lib/zhanlu-build/state }, { name: git-cache, mountPath: /var/lib/zhanlu-build/git-cache }, { name: work, mountPath: /var/lib/zhanlu-build/work }, { name: github-key, mountPath: /run/secrets/github, readOnly: true }, { name: credentials, mountPath: /run/zhanlu-credentials }, { name: tmp, mountPath: /tmp }]
         - name: caddy
           image: caddy:2.10.2-alpine
           command: [/bin/sh, -ceu]
@@ -37,76 +73,15 @@ spec:
           resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { cpu: 250m, memory: 128Mi } }
           securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           volumeMounts: [{ name: tmp, mountPath: /tmp }, { name: caddy-config, mountPath: /etc/caddy, readOnly: true }, { name: tls, mountPath: /etc/zhanlu-tls, readOnly: true }, { name: caddy-data, mountPath: /data }, { name: caddy-runtime, mountPath: /config }]
-      volumes: [{ name: tmp, emptyDir: {} }, { name: caddy-config, configMap: { name: build-portal-caddy } }, { name: tls, secret: { secretName: build-portal-tls } }, { name: caddy-data, emptyDir: {} }, { name: caddy-runtime, emptyDir: {} }]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: build-portal-scheduler }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: build-portal, component: scheduler } }
-  template:
-    metadata: { labels: { app: build-portal, component: scheduler } }
-    spec:
-      automountServiceAccountToken: false
-      securityContext: { seccompProfile: { type: RuntimeDefault } }
-      containers:
-        - name: scheduler
-          image: zhanlu/build-portal-web
-          command: [node, /scheduler/dist/index.js]
-          envFrom: [{ secretRef: { name: build-portal-runtime } }]
-          env: [{ name: APP_COMPONENT, value: scheduler }]
-          resources: { requests: { cpu: 25m, memory: 64Mi }, limits: { cpu: 250m, memory: 256Mi } }
-          securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
-          volumeMounts: [{ name: tmp, mountPath: /tmp }]
-      volumes: [{ name: tmp, emptyDir: {} }]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: build-portal-worker }
-spec:
-  replicas: 1
-  strategy: { type: Recreate }
-  selector: { matchLabels: { app: build-portal, component: worker } }
-  template:
-    metadata: { labels: { app: build-portal, component: worker } }
-    spec:
-      automountServiceAccountToken: false
-      securityContext: { seccompProfile: { type: RuntimeDefault }, fsGroup: 10001 }
-      hostAliases: [{ ip: 10.155.208.112, hostnames: [gitlab.cmss.com] }]
-      nodeSelector: { kubernetes.io/arch: amd64 }
-      affinity: { nodeAffinity: { preferredDuringSchedulingIgnoredDuringExecution: [{ weight: 100, preference: { matchExpressions: [{ key: kubernetes.io/hostname, operator: In, values: [peng-pve-ubuntu] }] } }] } }
-      tolerations: [{ key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }]
-      containers:
-        - name: worker
-          image: zhanlu/build-portal-worker
-          envFrom: [{ secretRef: { name: build-portal-runtime } }, { secretRef: { name: build-portal-worker } }]
-          env:
-            - { name: APP_COMPONENT, value: worker }
-            - { name: WORKSPACE_ROOT, value: /var/lib/zhanlu-build/workspace }
-            # Keep the GitLab/GitHub synchronization cache on the dedicated NAS
-            # PVC.  The sync wrapper rejects non-mounted roots, so these paths
-            # also make dry-run and apply share the same cache and lock.
-            - { name: ZHANLU_SYNC_VOLUME_ROOT, value: /var/lib/zhanlu-build }
-            - { name: ZHANLU_SYNC_EXTERNAL_STATE_ROOT, value: /var/lib/zhanlu-build/git-sync }
-            - { name: ZHANLU_SYNC_EXTERNAL_TMP_ROOT, value: /var/lib/zhanlu-build/git-sync/tmp }
-            - { name: ZHANLU_SYNC_EXTERNAL_CACHE_ROOT, value: /var/lib/zhanlu-build/git-sync/cache }
-            - { name: ZHANLU_SYNC_LOCK_ROOT, value: /var/lib/zhanlu-build/git-sync/lock }
-            # The worker PVC is declared by this Deployment; the base image's
-            # mount-format probe is not portable across util-linux versions.
-            - { name: ZHANLU_SYNC_SKIP_MOUNT_CHECK, value: "1" }
-            # Release tags are created by an empty commit in the dedicated
-            # checkout; keep its public history consistent with existing
-            # Zhanlu release commits instead of relying on container-global
-            # Git configuration.
-            - { name: RELEASE_GIT_USER_NAME, value: village-way }
-            - { name: RELEASE_GIT_USER_EMAIL, value: wandepen@163.com }
-            # The dedicated NAS export maps all files to its service uid;
-            # this isolated workspace is explicitly trusted by Git.
-            - { name: GIT_CONFIG_COUNT, value: "3" }
-            - { name: GIT_CONFIG_KEY_2, value: safe.directory }
-            - { name: GIT_CONFIG_VALUE_2, value: "*" }
-          resources: { requests: { cpu: 200m, memory: 512Mi }, limits: { cpu: "2", memory: 2Gi } }
-          securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
-          volumeMounts: [{ name: worker-data, mountPath: /var/lib/zhanlu-build }, { name: github-key, mountPath: /run/secrets/github, readOnly: true }, { name: credentials, mountPath: /run/zhanlu-credentials }]
-      volumes: [{ name: worker-data, persistentVolumeClaim: { claimName: worker-data } }, { name: github-key, secret: { secretName: build-portal-github-app, defaultMode: 256 } }, { name: credentials, emptyDir: {} }]
+      volumes:
+        - { name: state, hostPath: { path: /vol1/1000/k8s-build/build-portal/state, type: DirectoryOrCreate } }
+        - { name: git-cache, hostPath: { path: /vol1/1000/k8s-build/build-portal/git-cache, type: DirectoryOrCreate } }
+        - { name: backups, hostPath: { path: /vol1/1000/k8s-build/build-portal/backups, type: DirectoryOrCreate } }
+        - { name: work, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+        - { name: credentials, emptyDir: {} }
+        - { name: github-key, secret: { secretName: build-portal-github-app, defaultMode: 256 } }
+        - { name: caddy-config, configMap: { name: build-portal-caddy } }
+        - { name: tls, secret: { secretName: build-portal-tls } }
+        - { name: caddy-data, emptyDir: {} }
+        - { name: caddy-runtime, emptyDir: {} }

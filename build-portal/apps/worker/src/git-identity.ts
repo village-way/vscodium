@@ -8,14 +8,16 @@ export const DEFAULT_RELEASE_GIT_USER_EMAIL = "wandepen@163.com";
 
 export type ReleaseGitIdentity = { name: string; email: string };
 
-export function releaseGitIdentity(env: NodeJS.ProcessEnv = process.env): ReleaseGitIdentity {
+type StringEnvironment = Readonly<Record<string, string | undefined>>;
+
+export function releaseGitIdentity(env: StringEnvironment = process.env): ReleaseGitIdentity {
   const name = env.RELEASE_GIT_USER_NAME ?? DEFAULT_RELEASE_GIT_USER_NAME;
   const email = env.RELEASE_GIT_USER_EMAIL ?? DEFAULT_RELEASE_GIT_USER_EMAIL;
   if (!name.trim() || !email.trim()) throw new Error("RELEASE_GIT_USER_NAME and RELEASE_GIT_USER_EMAIL are required");
   return { name, email };
 }
 
-export async function configureReleaseGitIdentity(path: string, env: NodeJS.ProcessEnv = process.env): Promise<ReleaseGitIdentity> {
+export async function configureReleaseGitIdentity(path: string, env: StringEnvironment = process.env): Promise<ReleaseGitIdentity> {
   const identity = releaseGitIdentity(env);
   const commandEnv = { ...process.env, ...env };
   await exec("git", ["-C", path, "config", "--local", "user.name", identity.name], { env: commandEnv });

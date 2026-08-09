@@ -1,8 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@zhanlu/build-portal-auth": ["packages/auth/src/index.ts"],
+      "@zhanlu/build-portal-contracts": ["packages/contracts/src/index.ts"],
+      "@zhanlu/build-portal-db": ["packages/db/src/index.ts"],
+      "@zhanlu/build-portal-github-app": ["packages/github-app/src/index.ts"],
+      "@zhanlu/build-portal-release-runner": ["packages/release-runner/src/index.ts"]
+    },
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,

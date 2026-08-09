@@ -4,8 +4,7 @@ import { z } from "zod";
 export const platforms = ["macos", "linux", "windows", "all"] as const;
 export const buildPhases = [
   "preview_queued", "previewing", "awaiting_confirmation", "queued",
-  "source_sync_preview", "source_sync", "preflight", "release_prepare",
-  "dispatching", "running", "succeeded", "failed", "cancelled", "needs_attention",
+  "source_sync", "preflight", "dispatching", "succeeded", "failed",
 ] as const;
 
 const fullCommitPattern = /^[0-9a-f]{40}$/i;
@@ -70,18 +69,6 @@ export type BuildSpec = z.infer<typeof buildSpecSchema>;
 export type BuildPhase = typeof buildPhases[number];
 export type Platform = typeof platforms[number];
 
-export const scheduleInputSchema = z.object({
-  name: z.string().min(1).max(120),
-  cron: z.string().min(5).max(120),
-  timezone: z.literal("Asia/Tokyo").default("Asia/Tokyo"),
-  enabled: z.boolean().default(true),
-  spec: buildSpecSchema,
-}).superRefine((value, ctx) => {
-  if (value.spec.kind !== "development" || value.spec.publish || value.spec.syncGitLab || value.spec.triggerOnly) {
-    ctx.addIssue({ code: "custom", path: ["spec"], message: "schedules must be new development drafts without GitLab Release sync" });
-  }
-});
-
 export function resolveReleaseVersion(spec: BuildSpec, now = new Date()): { releaseVersion: string; timePatch: string } {
   const base = spec.version.replace(/^v/, "");
   const publicPatch = base.split(".")[2]!;
@@ -107,4 +94,4 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export const terminalPhases = new Set<BuildPhase>(["succeeded", "failed", "cancelled", "needs_attention"]);
+export const terminalPhases = new Set<BuildPhase>(["succeeded", "failed"]);

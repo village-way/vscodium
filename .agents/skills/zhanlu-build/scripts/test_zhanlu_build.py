@@ -319,6 +319,36 @@ class ZhanluBuildTest(unittest.TestCase):
         self.assertIn('"event": "source_refs_resolved"', output)
         self.assertIn('"sourceRefs"', output)
 
+    def test_portal_applies_only_the_confirmed_five_develop_plan(self):
+        plan_file = self.workspace / "confirmed.tsv"
+        rows = []
+        for number, repository in enumerate(zhanlu_build.COMPONENT_REPOS, start=1):
+            source_sha = format(number, "x") * 40
+            rows.append("\t".join([
+                repository, "branch", "develop", "refs/heads/develop",
+                "refs/heads/develop", source_sha, source_sha, "f" * 40,
+                "update",
+            ]))
+        plan_file.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        plan = zhanlu_build.make_plan(self.config(
+            apply=True,
+            portal_source_sync=True,
+            confirmed_source_plan=plan_file,
+        ))
+        runner = FakeRunner()
+        result, output = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        selected_calls = self.command_calls(
+            runner, ["bash", "./scripts/sync-zhanlu-selected-refs.sh"]
+        )
+        self.assertEqual(len(selected_calls), 1)
+        self.assertEqual(selected_calls[0][0], [
+            "bash", "./scripts/sync-zhanlu-selected-refs.sh",
+            "--apply-plan", str(plan_file),
+        ])
+        self.assertIn('"mirrorPlan"', output)
+        self.assertNotIn("--all-refs", " ".join(selected_calls[0][0]))
+
     def test_trigger_only_reuses_persisted_source_commits(self):
         plan = zhanlu_build.make_plan(
             self.config(

@@ -63,6 +63,8 @@ class Config:
     request_id: str | None = None
     generate_only: bool = False
     selected_source_sync: bool = False
+    portal_source_sync: bool = False
+    confirmed_source_plan: Path | None = None
     source_commit: str | None = None
     zhanlu_core_commit: str | None = None
     zhanlu_vs_commit: str | None = None
@@ -84,7 +86,7 @@ class ReleasePlan:
 
     @property
     def source_sync_all_refs(self) -> bool:
-        return not self.config.selected_source_sync and any(
+        return not (self.config.selected_source_sync or self.config.portal_source_sync) and any(
             ref != "develop"
             for ref in (
                 self.config.source_branch,
@@ -189,6 +191,12 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Synchronize only the three explicitly selected component refs",
     )
+    result.add_argument(
+        "--portal-source-sync",
+        action="store_true",
+        help="Apply a confirmed five-develop plus selected-ref portal plan",
+    )
+    result.add_argument("--confirmed-source-plan", type=Path, help=argparse.SUPPRESS)
     result.add_argument("--source-commit", help=argparse.SUPPRESS)
     result.add_argument("--zhanlu-core-commit", help=argparse.SUPPRESS)
     result.add_argument("--zhanlu-vs-commit", help=argparse.SUPPRESS)
@@ -197,6 +205,10 @@ def parser() -> argparse.ArgumentParser:
 
 def parse_config(argv: Sequence[str] | None = None) -> Config:
     args = parser().parse_args(argv)
+    if args.selected_source_sync and args.portal_source_sync:
+        raise BuildError("selected and portal source synchronization are mutually exclusive")
+    if args.portal_source_sync != bool(args.confirmed_source_plan):
+        raise BuildError("--portal-source-sync requires --confirmed-source-plan")
     if args.poll_interval <= 0:
         raise BuildError("--poll-interval must be greater than zero")
     if args.run_discovery_timeout < 0:
@@ -230,6 +242,8 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         request_id=args.request_id,
         generate_only=args.generate_only,
         selected_source_sync=args.selected_source_sync,
+        portal_source_sync=args.portal_source_sync,
+        confirmed_source_plan=args.confirmed_source_plan.resolve() if args.confirmed_source_plan else None,
         source_commit=args.source_commit,
         zhanlu_core_commit=args.zhanlu_core_commit,
         zhanlu_vs_commit=args.zhanlu_vs_commit,
@@ -323,7 +337,7 @@ def validate_native_scripts(plan: ReleasePlan) -> None:
         or not trigger_script.is_file()
         or not sync_script.is_file()
         or not sync_config.is_file()
-        or (plan.config.selected_source_sync and not selected_sync_script.is_file())
+        or ((plan.config.selected_source_sync or plan.config.portal_source_sync) and not selected_sync_script.is_file())
     ):
         raise BuildError(
             f"missing native release scripts under canonical checkout: {plan.release_repo}"
@@ -350,7 +364,7 @@ def validate_native_scripts(plan: ReleasePlan) -> None:
             raise BuildError(
                 f"sync-zhanlu-gitlab-to-github.sh lacks required capability: {token}"
             )
-    if plan.config.selected_source_sync:
+    if plan.config.selected_source_sync or plan.config.portal_source_sync:
         selected_text = selected_sync_script.read_text(encoding="utf-8")
         for token in ("--ref", "--output-plan", "--apply-plan"):
             if token not in selected_text:
@@ -465,6 +479,25 @@ def source_refs_document(
     }
 
 
+def source_plan_document(
+    rows: Sequence[ResolvedSourceRef],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "repository": item.repository,
+            "refType": item.ref_type,
+            "requestedRef": item.requested_ref,
+            "sourceRef": item.source_ref,
+            "destinationRef": item.destination_ref,
+            "gitlabSha": item.source_commit_sha,
+            "gitlabObjectSha": item.source_object_sha,
+            "previousGithubSha": item.destination_sha,
+            "action": item.action,
+        }
+        for item in rows
+    ]
+
+
 def plan_document(
     plan: ReleasePlan,
     resolved_sources: Mapping[str, ResolvedSourceRef] | None = None,
@@ -488,6 +521,7 @@ def plan_document(
         "publish": plan.config.publish,
         "sourceSyncAllRefs": plan.source_sync_all_refs,
         "sourceSyncSelectedRefs": plan.config.selected_source_sync,
+        "sourceSyncPortalPlan": plan.config.portal_source_sync,
         "workflows": list(plan.workflows),
     }
     if resolved_sources:
@@ -616,6 +650,9 @@ def print_plan(
     print(
         "  GitLab -> GitHub source sync: "
         + (
+            "confirmed portal plan"
+            if plan.config.portal_source_sync
+            else
             "selected refs only"
             if plan.config.selected_source_sync
             else "all branches and tags"
@@ -646,7 +683,15 @@ def print_plan(
             print(f"  {name}: state={state} branch={branch} sha={sha}", file=output)
 
     print("Native commands:", file=output)
-    if plan.config.selected_source_sync:
+    if plan.config.portal_source_sync:
+        assert plan.config.confirmed_source_plan is not None
+        print(
+            "  " + command_text(selected_source_sync_command(
+                plan, dry_run=False, plan_file=plan.config.confirmed_source_plan
+            )),
+            file=output,
+        )
+    elif plan.config.selected_source_sync:
         placeholder = Path("<selected-ref-plan>")
         print(
             "  " + command_text(selected_source_sync_command(plan, dry_run=True, plan_file=placeholder)),
@@ -765,6 +810,33 @@ def synchronize_sources(
 ) -> dict[str, ResolvedSourceRef]:
     for tool in ("git", "bash"):
         require_tool(tool)
+    if plan.config.portal_source_sync:
+        plan_file = plan.config.confirmed_source_plan
+        if not plan_file or not plan_file.is_file():
+            raise BuildError("confirmed portal source plan is not readable")
+        rows, resolved = portal_source_plan(plan, plan_file)
+        print("Applying confirmed portal GitLab -> GitHub source plan...", file=output)
+        runner.run(
+            selected_source_sync_command(
+                plan, dry_run=False, plan_file=plan_file
+            ),
+            cwd=plan.release_repo,
+            env=environment,
+            capture=False,
+        )
+        event = {
+            "schemaVersion": "v1",
+            "event": "source_refs_resolved",
+            "sourceRefs": source_refs_document(resolved),
+            "mirrorPlan": source_plan_document(rows),
+        }
+        print(json.dumps(event, sort_keys=True), file=output)
+        print(
+            "GitLab -> GitHub source synchronization completed "
+            "(confirmed portal plan).",
+            file=output,
+        )
+        return resolved
     if plan.config.selected_source_sync:
         print("Previewing selected GitLab -> GitHub refs...", file=output)
         with tempfile.TemporaryDirectory(prefix="zhanlu-selected-ref-plan.") as directory:
@@ -823,8 +895,8 @@ def synchronize_sources(
     return {}
 
 
-def parse_selected_ref_plan(path: Path) -> dict[str, ResolvedSourceRef]:
-    result: dict[str, ResolvedSourceRef] = {}
+def parse_selected_ref_plan_rows(path: Path) -> list[ResolvedSourceRef]:
+    result: list[ResolvedSourceRef] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as error:
@@ -844,8 +916,6 @@ def parse_selected_ref_plan(path: Path) -> dict[str, ResolvedSourceRef]:
             destination_sha,
             action,
         ) = fields
-        if repository in result:
-            raise BuildError(f"duplicate selected-ref plan repository: {repository}")
         if not re.fullmatch(r"[0-9a-f]{40}", source_object_sha) or not re.fullmatch(
             r"[0-9a-f]{40}", source_commit_sha
         ):
@@ -854,7 +924,7 @@ def parse_selected_ref_plan(path: Path) -> dict[str, ResolvedSourceRef]:
             destination_sha = ""
         elif not re.fullmatch(r"[0-9a-f]{40}", destination_sha):
             raise BuildError(f"invalid previous GitHub SHA for {repository}")
-        result[repository] = ResolvedSourceRef(
+        result.append(ResolvedSourceRef(
             repository=repository,
             ref_type=ref_type,
             requested_ref=requested_ref,
@@ -864,8 +934,63 @@ def parse_selected_ref_plan(path: Path) -> dict[str, ResolvedSourceRef]:
             source_commit_sha=source_commit_sha,
             destination_sha=destination_sha,
             action=action,
-        )
+        ))
     return result
+
+
+def parse_selected_ref_plan(path: Path) -> dict[str, ResolvedSourceRef]:
+    result: dict[str, ResolvedSourceRef] = {}
+    for item in parse_selected_ref_plan_rows(path):
+        if item.repository in result:
+            raise BuildError(
+                f"duplicate selected-ref plan repository: {item.repository}"
+            )
+        result[item.repository] = item
+    return result
+
+
+def portal_source_plan(
+    plan: ReleasePlan, path: Path
+) -> tuple[list[ResolvedSourceRef], dict[str, ResolvedSourceRef]]:
+    rows = parse_selected_ref_plan_rows(path)
+    expected_repositories = set(COMPONENT_REPOS)
+    develop_rows = {
+        item.repository: item
+        for item in rows
+        if item.destination_ref == "refs/heads/develop"
+    }
+    if set(develop_rows) != expected_repositories:
+        raise BuildError(
+            "portal source plan must contain develop for all five components"
+        )
+    selected_requests = {
+        "zhanlu-code": plan.config.source_branch,
+        "zhanlu-core": plan.config.zhanlu_core_ref,
+        "zhanlu-vs": plan.config.zhanlu_vs_ref,
+    }
+    selected: dict[str, ResolvedSourceRef] = {}
+    for repository, requested in selected_requests.items():
+        matches = [
+            item for item in rows
+            if item.repository == repository and item.requested_ref == requested
+        ]
+        if len(matches) != 1:
+            raise BuildError(
+                f"portal source plan must resolve exactly one {repository}={requested}"
+            )
+        selected[repository] = matches[0]
+    destinations = [(item.repository, item.destination_ref) for item in rows]
+    if len(set(destinations)) != len(destinations):
+        raise BuildError("portal source plan contains duplicate destination refs")
+    expected_count = 5 + sum(
+        requested not in ("develop", "refs/heads/develop")
+        for requested in selected_requests.values()
+    )
+    if len(rows) != expected_count:
+        raise BuildError(
+            f"portal source plan has {len(rows)} rows; expected {expected_count}"
+        )
+    return rows, selected
 
 
 def parse_json_list(raw: str, context: str) -> list[dict[str, object]]:

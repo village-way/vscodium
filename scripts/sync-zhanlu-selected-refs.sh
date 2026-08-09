@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Synchronize only explicitly selected GitLab refs to their GitHub mirrors.
+# Synchronize an immutable list of explicitly selected GitLab refs to GitHub.
 
 set -u
 set -o pipefail
@@ -27,8 +27,10 @@ Usage:
   sync-zhanlu-selected-refs.sh --apply-plan FILE
 
 The dry-run resolves every selected GitLab ref, verifies the exact GitHub
-force-with-lease push, and writes an immutable TSV plan. Applying revalidates
-the GitLab source and GitHub lease before changing only the planned refs.
+force-with-lease push, and writes an immutable TSV plan. A repository may
+appear more than once when the portal synchronizes develop plus a custom build
+ref. Applying revalidates the GitLab source and GitHub lease before changing
+only the planned refs.
 EOF
 }
 
@@ -231,7 +233,7 @@ dry_run() {
 	for entry in "${SELECTED_REFS[@]}"; do
 		repo="${entry%%=*}"; requested="${entry#*=}"
 		[[ -n "$repo" && -n "$requested" ]] || { echo "Invalid selected ref: ${entry}" >&2; return 1; }
-		[[ "$(printf '%s\n' "${SELECTED_REFS[@]}" | awk -F= -v repo="$repo" '$1 == repo { count++ } END { print count+0 }')" -eq 1 ]] || { echo "Duplicate selected repository: ${repo}" >&2; return 1; }
+		[[ "$(printf '%s\n' "${SELECTED_REFS[@]}" | awk -v selected="$entry" '$0 == selected { count++ } END { print count+0 }')" -eq 1 ]] || { echo "Duplicate selected repository/ref pair: ${entry}" >&2; return 1; }
 		row="$(config_row "$repo")" || { echo "Repository is not configured: ${repo}" >&2; return 1; }
 		IFS=$'\t' read -r _ gitlab_url github_url default_branch <<<"$row"
 		configure_cache "$repo" "$gitlab_url" "$github_url" || return 2
@@ -259,13 +261,13 @@ apply_plan() {
 			return 1
 		fi
 		current_destination_sha="$(remote_sha "$github_url" "$destination_ref")"
+		if [[ "$current_destination_sha" == "$planned_object_sha" ]]; then
+			echo "[${repo}] already applied ${type}: ${requested} (${source_commit_sha})"
+			continue
+		fi
 		if [[ "$current_destination_sha" != "$planned_destination_sha" ]]; then
 			echo "[${repo}] GitHub ref moved after dry-run: ${destination_ref}" >&2
 			return 1
-		fi
-		if [[ "$current_destination_sha" == "$planned_object_sha" ]]; then
-			echo "[${repo}] unchanged ${type}: ${requested} (${source_commit_sha})"
-			continue
 		fi
 		push_log="${RUN_DIR}/${repo}.apply"
 		if ! git --git-dir="${CACHE_ROOT}/${repo}.git" push --porcelain --no-verify "--force-with-lease=${destination_ref}:${planned_destination_sha}" github "${local_ref}:${destination_ref}" >"$push_log" 2>&1; then

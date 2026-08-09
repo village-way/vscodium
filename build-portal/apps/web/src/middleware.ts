@@ -14,4 +14,4 @@ export function middleware(request: NextRequest) {
   return NextResponse.redirect(login);
 }
 
-export const config = { matcher: ["/", "/schedules/:path*", "/builds/:path*"] };
+export const config = { matcher: ["/", "/builds/:path*"] };

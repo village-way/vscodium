@@ -21,9 +21,10 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
   component repositories from GitLab to GitHub. Use default branches for the
   normal `develop` flow and all refs when any requested source ref is not
   `develop`.
-- For build-portal invocations, use `--selected-source-sync`. This resolves and
-  synchronizes only the selected zhanlu-code, zhanlu-core, and zhanlu-vs refs;
-  it must never add `--all-refs` or enumerate unselected repositories/refs.
+- For build-portal invocations, preview an immutable plan containing `develop`
+  for all five components plus any distinct selected zhanlu-code,
+  zhanlu-core, and zhanlu-vs refs. Apply that exact plan with
+  `--portal-source-sync --confirmed-source-plan`; never add `--all-refs`.
 - Keep the GitHub Release as draft unless the user explicitly requests
   publication.
 - Sync the five component GitLab repositories for formal releases; do not sync
@@ -58,8 +59,9 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
    same command with `--apply`.
 6. During an interactive apply, run
    `sync-zhanlu-gitlab-to-github.sh --dry-run` first. For build-portal apply,
-   run `sync-zhanlu-selected-refs.sh --dry-run` with exactly the three selected
-   refs, then apply its immutable plan. Continue to synchronization only when
+   the Worker must already have run `sync-zhanlu-selected-refs.sh --dry-run`
+   for all five `develop` refs plus distinct selected build refs. Apply only
+   that user-confirmed immutable plan. Continue to synchronization only when
    every preview succeeds; continue to release creation only when every
    synchronization succeeds.
 7. Report the source synchronization result, GitHub Release URL, GitLab release
@@ -92,8 +94,8 @@ python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
 python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
   --kind development --version 1.4.1 --no-wait
 
-# Machine-readable portal dispatch; the final JSON line uses schema v1 and
-# contains resolved sourceRefs plus the exact GitHub workflow run IDs/URLs
+# Machine-readable legacy selected-ref dispatch; the final JSON line uses
+# schema v1 and contains resolved sourceRefs plus exact workflow run IDs/URLs
 python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
   --kind development --version 1.4.1 --platform linux \
   --request-id 71efcf01-7b10-4db0-9efd-f2af58f26a81 \
@@ -116,10 +118,11 @@ non-default source or patch.
   default-branch mode when all three build refs are `develop`; add `--all-refs`
   when one selects anything else. This legacy mirror-maintenance behavior does
   not apply to the build portal.
-- For portal builds, GitLab is authoritative. Preview all three selected refs
-  before the first remote write, then update only their corresponding GitHub
-  refs with exact `--force-with-lease=<ref>:<preview-sha>`. Never use an
-  unconditional force push. Preserve the resolved source commits for retries.
+- For portal builds, GitLab is authoritative. Before the first remote write,
+  preview all five component `develop` refs plus distinct selected build refs.
+  Update only those planned GitHub refs with exact
+  `--force-with-lease=<ref>:<preview-sha>`. Never use an unconditional force
+  push. Preserve the confirmed plan and resolved build commits for recovery.
 - Require the release checkout to be clean, on `master`, and equal to
   `origin/master` after fetch.
 - Before formal GitLab synchronization, require `zhanlu-cloud`, `zhanlu-code`,
