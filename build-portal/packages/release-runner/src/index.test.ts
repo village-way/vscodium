@@ -49,3 +49,18 @@ test("release runner preserves the actionable ANSI-prefixed error", async () => 
     await rm(workspace, { recursive: true, force: true });
   }
 });
+test("release runner preserves an actionable GitHub remote refusal", async () => {
+  const workspace = await mkdtemp(`${tmpdir()}/zhanlu-release-runner-`);
+  const script = `${workspace}/fail.py`;
+  const previous = process.env.ZHANLU_BUILD_SCRIPT;
+  try {
+    await mkdir(`${workspace}/vscodium`, { recursive: true });
+    await writeFile(script, "import sys\nsys.stderr.write('remote: error: refusing to allow a GitHub App to update workflow .github/workflows/stable.yml without workflows permission\\n')\nsys.stderr.write(\"error: failed to push some refs to 'https://github.com/example/repo.git'\\n\")\nsys.exit(1)\n", "utf8");
+    process.env.ZHANLU_BUILD_SCRIPT = script;
+    await assert.rejects(() => runRelease(spec, "request-failure", { workspace, apply: true, confirmedSourcePlan: `${workspace}/plan.tsv` }), /zhanlu_build\.py exited with 1: remote: error: refusing to allow a GitHub App/);
+  } finally {
+    if (previous === undefined) delete process.env.ZHANLU_BUILD_SCRIPT;
+    else process.env.ZHANLU_BUILD_SCRIPT = previous;
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

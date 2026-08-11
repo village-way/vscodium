@@ -30,11 +30,9 @@ export async function installationToken(): Promise<string> {
 export async function github(): Promise<Octokit> { return new Octokit({ auth: await installationToken() }); }
 
 export async function gitCredentialToken(): Promise<string> {
-  try { return await installationToken(); }
-  catch (error) {
-    if (process.env.GITHUB_GIT_TOKEN) return process.env.GITHUB_GIT_TOKEN;
-    throw error;
-  }
+  const token = process.env.GITHUB_GIT_TOKEN?.trim();
+  if (!token) throw new Error("GITHUB_GIT_TOKEN is required for workflow-capable Git pushes");
+  return token;
 }
 
 export async function assertRepositoryAccess(repositories: string[]): Promise<void> {
@@ -46,6 +44,7 @@ export async function assertRepositoryAccess(repositories: string[]): Promise<vo
 }
 
 export async function startCredentialBroker(socketPath = process.env.GITHUB_CREDENTIAL_SOCKET ?? "/run/zhanlu-credentials/github.sock"): Promise<Server> {
+  await gitCredentialToken();
   await unlink(socketPath).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
   const server = createServer(async (socket) => {
     try { socket.end(`${await gitCredentialToken()}\n`); }

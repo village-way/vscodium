@@ -46,6 +46,7 @@ GITHUB_APP_INSTALLATION_ID=$(require_secret "$deployment_env" GITHUB_APP_INSTALL
 GITHUB_OWNER=$(require_secret "$deployment_env" GITHUB_OWNER)
 GITHUB_REPOSITORY_NAME=$(require_secret "$deployment_env" GITHUB_REPOSITORY_NAME)
 GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github/private-key.pem
+GITHUB_GIT_TOKEN=$(require_secret "$deployment_env" GITHUB_GIT_TOKEN)
 GITLAB_TOKEN=$(require_secret "$deployment_env" GITLAB_TOKEN)
 GITLAB_HOST=$(require_secret "$deployment_env" GITLAB_HOST)
 GITLAB_API_HOST=$(require_secret "$deployment_env" GITLAB_API_HOST)
