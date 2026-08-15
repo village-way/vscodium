@@ -359,6 +359,8 @@ jobs:
     needs:
       - check
       - compile
+    # zhanlu_change - do not inherit a skipped optional Bridge need through compile
+    if: always() && needs.check.result == 'success' && needs.compile.result == 'success'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -644,7 +646,8 @@ jobs:
       SHOULD_BUILD: ${{ needs.check.outputs.SHOULD_BUILD }}
       SHOULD_DEPLOY: ${{ needs.check.outputs.SHOULD_DEPLOY }}
       VSCODE_ARCH: ${{ matrix.vscode_arch }}
-    if: needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true'
+    # zhanlu_change - do not inherit a skipped optional Bridge need through compile
+    if: always() && needs.check.result == 'success' && needs.compile.result == 'success' && (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true')
 
     steps:
       - uses: actions/checkout@v6
@@ -778,7 +781,8 @@ jobs:
       SHOULD_BUILD: ${{ needs.check.outputs.SHOULD_BUILD }}
       SHOULD_DEPLOY: ${{ needs.check.outputs.SHOULD_DEPLOY }}
       VSCODE_ARCH: ${{ matrix.vscode_arch }}
-    if: needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true'
+    # zhanlu_change - do not inherit a skipped optional Bridge need through compile
+    if: always() && needs.check.result == 'success' && needs.compile.result == 'success' && (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true')
 
     steps:
       - uses: actions/checkout@v6
