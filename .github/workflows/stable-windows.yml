@@ -357,11 +357,15 @@ jobs:
         run: npm install -g pnpm
         if: env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - keep the modern Bun cache separate from the later baseline runtime
       - name: Setup Bun
+        id: setup_bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.3.14'
+          no-cache: ${{ matrix.vscode_arch == 'x64' }}
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+      # zhanlu_change end
 
       - name: Check existing VSCodium tags/releases
         env:
@@ -412,6 +416,18 @@ jobs:
           npm_config_target_arch: ${{ matrix.vscode_arch }}
         run: ./build/windows/package.sh
         if: env.SHOULD_BUILD == 'yes'
+
+      # zhanlu_change start - avoid Bun's unreliable Windows cross-target extraction for the baseline CLI
+      - name: Setup Windows x64 baseline Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v${{ steps.setup_bun.outputs.bun-version }}/bun-windows-x64-baseline.zip
+        if: >-
+          matrix.vscode_arch == 'x64' &&
+          env.SHOULD_BUILD == 'yes' &&
+          env.SHOULD_BUILD_EXE_SYS_BASELINE != 'no' &&
+          (env.SHOULD_DEPLOY == 'yes' || github.event.inputs.generate_assets == 'true')
+      # zhanlu_change end
 
       - name: Prepare assets
         run: ./prepare_assets.sh
