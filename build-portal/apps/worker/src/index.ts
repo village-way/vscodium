@@ -8,6 +8,7 @@ import { appendBuildEvent, closeDatabase, getDatabase, id, now, parseJson, trans
 import { assertRepositoryAccess, github, installationToken, startCredentialBroker } from "@zhanlu/build-portal-github-app";
 import { runRelease, type SourceRefResult, type SourceRefs } from "@zhanlu/build-portal-release-runner";
 import { configureReleaseGitIdentity } from "./git-identity.js";
+import { prepareGitlabCliEnvironment } from "./gitlab-cli.js";
 
 const exec = promisify(execFile);
 const WORKER_ID = process.env.WORKER_ID ?? hostname();
@@ -298,6 +299,7 @@ async function processBuild(build: BuildRow): Promise<void> {
 async function main(): Promise<void> {
   await mkdir(WORKSPACE_ROOT, { recursive: true });
   await mkdir(GIT_CACHE_ROOT, { recursive: true });
+  await prepareGitlabCliEnvironment();
   await startCredentialBroker();
   const githubRepositories = Object.values(repositoryConfig()).flatMap((value) => {
     const url = typeof value === "string" ? value : value.github;

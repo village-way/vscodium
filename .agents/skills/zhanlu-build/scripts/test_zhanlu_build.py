@@ -646,6 +646,43 @@ class ZhanluBuildTest(unittest.TestCase):
         self.assertEqual(create_call[2]["GITLAB_TOKEN"], secret)
         self.assertEqual(create_call[2]["GITLAB_FORCE_TAG_UPDATE"], "false")
 
+    def test_portal_http_gitlab_host_is_normalized_for_glab(self):
+        secret = "never-print-this-token"
+        plan = zhanlu_build.make_plan(
+            self.config(kind="formal", version="1.4.1", apply=True)
+        )
+        runner = FakeRunner()
+        with mock.patch.dict(
+            zhanlu_build.os.environ,
+            {
+                "PATH": zhanlu_build.os.environ.get("PATH", ""),
+                "GITLAB_TOKEN": secret,
+                "GITLAB_HOST": "gitlab.cmss.com",
+                "GITLAB_API_HOST": "gitlab.cmss.com",
+                "GITLAB_API_PROTOCOL": "http",
+            },
+            clear=True,
+        ):
+            result, output = self.execute_apply(plan, runner)
+        self.assertEqual(result, 0)
+        self.assertNotIn(secret, output)
+        create_env = self.command_calls(runner, ["bash", "create-release.sh"])[0][2]
+        self.assertEqual(create_env["GITLAB_HOST"], "http://gitlab.cmss.com")
+        glab_env = self.command_calls(runner, ["glab", "auth", "status"])[0][2]
+        self.assertEqual(glab_env["GITLAB_HOST"], "http://gitlab.cmss.com")
+        config_path = (
+            self.workspace / ".zhanlu-cli" / "config" / "glab-cli" / "config.yml"
+        )
+        self.assertTrue(config_path.is_file())
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+        self.assertIn("api_protocol: http", config_path.read_text(encoding="utf-8"))
+
+    def test_gitlab_cli_host_preserves_explicit_urls(self):
+        self.assertEqual(
+            zhanlu_build.gitlab_cli_host({"GITLAB_HOST": "http://gitlab.cmss.com/"}),
+            ("http://gitlab.cmss.com", "gitlab.cmss.com"),
+        )
+
     def test_dry_run_never_calls_remote_tools_or_native_scripts(self):
         plan = zhanlu_build.make_plan(self.config())
         runner = FakeRunner()

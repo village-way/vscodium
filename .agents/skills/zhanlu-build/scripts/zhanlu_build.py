@@ -17,6 +17,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterable, Mapping, Sequence, TextIO
+from urllib.parse import urlparse
 
 
 COMPONENT_REPOS = (
@@ -574,30 +575,67 @@ def read_env_value(env_file: Path, key: str) -> str | None:
     return None
 
 
+def gitlab_cli_host(environment: Mapping[str, str]) -> tuple[str, str]:
+    raw = environment.get("GITLAB_HOST", "").strip()
+    api_host = environment.get("GITLAB_API_HOST", "").strip()
+    protocol = environment.get("GITLAB_API_PROTOCOL", "").strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
+        parsed = urlparse(raw)
+        return raw.rstrip("/"), parsed.hostname or api_host
+    host = api_host or raw
+    if not host:
+        return raw, ""
+    return f"{(protocol or 'https')}://{host}", host
+
+
+def prepare_gitlab_cli_environment(workspace: Path, environment: dict[str, str]) -> None:
+    url, host = gitlab_cli_host(environment)
+    if url:
+        environment["GITLAB_HOST"] = url
+    token = environment.get("GITLAB_TOKEN") or environment.get("GITLAB_ACCESS_TOKEN")
+    if not token or not host:
+        return
+    config_home = workspace / ".zhanlu-cli" / "config"
+    cache_home = workspace / ".zhanlu-cli" / "cache"
+    config_dir = config_home / "glab-cli"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    cache_home.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.yml"
+    protocol = "http" if url.startswith("http://") else "https"
+    config_path.write_text(
+        f"hosts:\n    {host}:\n        token: {token}\n"
+        f"        api_host: {host}\n        api_protocol: {protocol}\n",
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+    environment["XDG_CONFIG_HOME"] = str(config_home)
+    environment["XDG_CACHE_HOME"] = str(cache_home)
+
+
 def load_gitlab_environment(workspace: Path, environment: dict[str, str]) -> None:
-    if environment.get("GITLAB_TOKEN") or environment.get("GITLAB_ACCESS_TOKEN"):
-        return
     env_file = workspace / ".env"
-    if not env_file.is_file():
-        return
-    for key in (
-        "GITLAB_TOKEN",
-        "GITLAB_ACCESS_TOKEN",
-        "OAUTH_TOKEN",
-        "GLAB_TOKEN",
-        "ZHANLU_GITLAB_TOKEN",
-        "ZHANLU_GITHUB_TOKEN",
+    if env_file.is_file() and not (
+        environment.get("GITLAB_TOKEN") or environment.get("GITLAB_ACCESS_TOKEN")
     ):
-        value = read_env_value(env_file, key)
-        if value:
-            environment["GITLAB_TOKEN"] = value
-            break
-    if not environment.get("GITLAB_HOST"):
+        for key in (
+            "GITLAB_TOKEN",
+            "GITLAB_ACCESS_TOKEN",
+            "OAUTH_TOKEN",
+            "GLAB_TOKEN",
+            "ZHANLU_GITLAB_TOKEN",
+            "ZHANLU_GITHUB_TOKEN",
+        ):
+            value = read_env_value(env_file, key)
+            if value:
+                environment["GITLAB_TOKEN"] = value
+                break
+    if env_file.is_file() and not environment.get("GITLAB_HOST"):
         host = read_env_value(env_file, "GITLAB_HOST") or read_env_value(
             env_file, "CI_SERVER_HOST"
         )
         if host:
             environment["GITLAB_HOST"] = host
+    prepare_gitlab_cli_environment(workspace, environment)
 
 
 def command_text(args: Iterable[str]) -> str:

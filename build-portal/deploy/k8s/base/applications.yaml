@@ -40,10 +40,31 @@ spec:
           volumeMounts: [{ name: state, mountPath: /var/lib/zhanlu-build/state }, { name: tmp, mountPath: /tmp }]
         - name: worker
           image: SET_IMAGE
-          command: [node, /app/dist/worker.mjs]
+          command: [/bin/sh, -ceu]
+          args:
+            - |
+              export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/tmp/xdg-config}"
+              export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/xdg-cache}"
+              mkdir -p "$XDG_CONFIG_HOME/glab-cli" "$XDG_CACHE_HOME"
+              python3 -c 'import os, pathlib
+              host=(os.environ.get("GITLAB_API_HOST") or os.environ.get("GITLAB_HOST","")).split("://")[-1]
+              protocol=os.environ.get("GITLAB_API_PROTOCOL") or "http"
+              token=os.environ.get("GITLAB_TOKEN") or ""
+              if host and token:
+                  path=pathlib.Path(os.environ["XDG_CONFIG_HOME"])/"glab-cli"/"config.yml"
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_text("hosts:\n    %s:\n        token: %s\n        api_host: %s\n        api_protocol: %s\n" % (host, token, host, protocol))
+                  os.chmod(path, 0o600)
+              '
+              if [ -n "${GITLAB_API_HOST:-}" ] && [ -n "${GITLAB_API_PROTOCOL:-}" ]; then
+                export GITLAB_HOST="${GITLAB_API_PROTOCOL}://${GITLAB_API_HOST}"
+              fi
+              exec node /app/dist/worker.mjs
           envFrom: [{ secretRef: { name: build-portal-runtime-sqlite } }, { secretRef: { name: build-portal-worker-v2 } }]
           env:
             - { name: APP_COMPONENT, value: worker }
+            - { name: XDG_CONFIG_HOME, value: /tmp/xdg-config }
+            - { name: XDG_CACHE_HOME, value: /tmp/xdg-cache }
             - { name: WORKSPACE_ROOT, value: /var/lib/zhanlu-build/work }
             - { name: GIT_CACHE_ROOT, value: /var/lib/zhanlu-build/git-cache }
             - { name: ZHANLU_SYNC_VOLUME_ROOT, value: /var/lib/zhanlu-build/git-cache }
