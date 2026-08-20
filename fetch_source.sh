@@ -203,6 +203,9 @@ FILES_TO_COPY=(
     "announcements-extra.json"
     "npmrc"
     ".git-msg"
+    # zhanlu_change start - setup-node runs after this script, so Node must come from zhanlu-code
+    ".nvmrc"
+    # zhanlu_change end
     "BRANDING_GUIDE.md"
     "FIX_BUILD_ERROR.md"
     "FUNDING.json"
