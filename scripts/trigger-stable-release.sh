@@ -130,10 +130,10 @@ VSCodium Stable 版本手动触发脚本
 
 
   # 使用指定 zhanlu-code 分支和 zhanlu-core commit 构建
-  ./scripts/trigger-stable-release.sh --workflow --source-branch master --zhanlu-core-ref aee58b29843260c3b9c7daea2dc3beefba03930b --platform all
+  ./scripts/trigger-stable-release.sh --workflow --source-branch master --zhanlu-core-ref 7abce138e9579e9d48415342b721c916c55ef4d4 --platform all
 
   # 使用已创建的 release/tag 构建并上传到同一个 Release
-  ./scripts/trigger-stable-release.sh --workflow --release-version 1.110.12670 --platform all
+  ./scripts/trigger-stable-release.sh --workflow --release-version 1.126.05564 --platform all
 
 注意事项:
   1. 需要先安装并登录 gh CLI: gh auth login

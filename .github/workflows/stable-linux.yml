@@ -637,8 +637,11 @@ jobs:
           npm_arch: s390x
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
+      # zhanlu_change start - skip REH arches vscode 1.126 does not ship (armhf) plus extra-arch gulp gaps
+      # ARM32: gulpfile.reh.ts BUILD_TARGETS dropped linux-armhf in 1.126
       # PPC64/RISCV64/LOONG64/S390X: arch-1..4 patches don't apply to zhanlu-core; gulp tasks missing
-      DISABLED: ${{ (matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64' || matrix.slug == 'S390X') && 'yes' || vars[format('DISABLE_STABLE_LINUX_REH_{0}', matrix.slug)] }}
+      DISABLED: ${{ (matrix.slug == 'ARM32' || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64' || matrix.slug == 'S390X') && 'yes' || vars[format('DISABLE_STABLE_LINUX_REH_{0}', matrix.slug)] }}
+      # zhanlu_change end
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
