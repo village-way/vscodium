@@ -380,6 +380,12 @@ jobs:
           name: vscode
         if: env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - restore the Agent source before the fetched Code scripts consume it
+      - name: Restore Agent source from zhanlu-core artifact
+        run: ./scripts/restore-zhanlu-agent-source.sh
+        if: env.SHOULD_BUILD == 'yes'
+      # zhanlu_change end
+
       - name: Write root .env for zhanlu-vs
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
