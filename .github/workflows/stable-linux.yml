@@ -400,9 +400,10 @@ jobs:
       image: ${{ matrix.image }}
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
+      # ARM32: the native Agent requires zl, which has no Linux ARM32 binary.
       # PPC64: no matching Electron ppc64le binary (lex-ibm only provides 37.2.3).
       # RISCV64/LOONG64: arch-2/arch-3 patches don't apply to zhanlu-core; gulp tasks missing.
-      DISABLED: ${{ (matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64') && 'yes' || vars[format('DISABLE_STABLE_LINUX_APP_{0}', matrix.slug)] }}
+      DISABLED: ${{ (matrix.slug == 'ARM32' || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64') && 'yes' || vars[format('DISABLE_STABLE_LINUX_APP_{0}', matrix.slug)] }}
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}

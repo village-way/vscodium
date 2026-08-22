@@ -240,7 +240,9 @@ jobs:
       image: ${{ matrix.image }}
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
-      DISABLED: ${{ vars[format('DISABLE_INSIDER_LINUX_APP_{0}', matrix.slug)] }}
+      # zhanlu_change start - native Agent desktop packages require an architecture-matched zl binary
+      DISABLED: ${{ (matrix.slug == 'ARM32' || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64') && 'yes' || vars[format('DISABLE_INSIDER_LINUX_APP_{0}', matrix.slug)] }}
+      # zhanlu_change end
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
