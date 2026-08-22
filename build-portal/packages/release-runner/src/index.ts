@@ -10,7 +10,8 @@ export type SourceRefs = Record<string, SourceRefResult>;
 export type RunnerResult = { schemaVersion: "v1"; requestId?: string; releaseVersion: string; versionTimePatch: string; sourceRefs?: SourceRefs; mirrorPlan?: SourceRefResult[]; runs: Array<{ workflow: string; runId: number; url: string }> };
 
 export function buildArguments(spec: BuildSpec, requestId: string, workspace: string, apply: boolean, confirmedSourcePlan: string, sourceRefs?: SourceRefs): string[] {
-  const args = ["--kind", spec.kind, "--version", spec.version, "--workspace", workspace, "--source-branch", spec.sourceBranch, "--delivery-profile", spec.deliveryProfile, "--zhanlu-core-ref", spec.zhanluCoreRef, "--zhanlu-vs-ref", spec.zhanluVsRef, "--bundle-codex-runtime", spec.bundleCodexRuntime ? "1" : "0", "--platform", spec.platform, "--request-id", requestId, "--output", "json", "--no-wait", "--portal-source-sync", "--confirmed-source-plan", confirmedSourcePlan];
+  const args = ["--kind", spec.kind, "--version", spec.version, "--workspace", workspace, "--workflow-ref", spec.vscodiumRef, "--source-branch", spec.sourceBranch, "--delivery-profile", spec.deliveryProfile, "--zhanlu-core-ref", spec.zhanluCoreRef, "--bundle-codex-runtime", spec.bundleCodexRuntime ? "1" : "0", "--platform", spec.platform, "--request-id", requestId, "--output", "json", "--no-wait", "--portal-source-sync", "--confirmed-source-plan", confirmedSourcePlan]; // zhanlu_change
+  if (spec.zhanluVsRef) args.push("--zhanlu-vs-ref", spec.zhanluVsRef); // zhanlu_change
   const sourceCommit = sourceRefs?.["zhanlu-code"]?.gitlabSha;
   const coreCommit = sourceRefs?.["zhanlu-core"]?.gitlabSha;
   const vsCommit = sourceRefs?.["zhanlu-vs"]?.gitlabSha;

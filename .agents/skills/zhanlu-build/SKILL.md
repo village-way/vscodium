@@ -14,21 +14,21 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
   releases from the canonical `/Volumes/Files/zhanlu-ide/vscodium` checkout.
   Do not run release commands from the older standalone checkout that contains
   this skill.
-- Use `develop` for zhanlu-code, zhanlu-core, and zhanlu-vs.
+- Use the selected VSCodium workflow branch, `develop` for zhanlu-code and zhanlu-core, and no zhanlu-vs ref for the native Agent architecture. Pass zhanlu-vs only for legacy VSIX builds.
 - Use delivery Profile `default`, workflow dispatch, and platform `all`.
 - Do not bundle the optional Codex CLI runtime by default; its build input is `0`.
-- For an interactive wrapper invocation, preview and then synchronize the five
-  component repositories from GitLab to GitHub. Use default branches for the
+- For an interactive wrapper invocation, preview and then synchronize the
+  required component repositories from GitLab to GitHub. Use default branches for the
   normal `develop` flow and all refs when any requested source ref is not
   `develop`.
 - For build-portal invocations, preview an immutable plan containing `develop`
-  for all five components plus any distinct selected zhanlu-code,
-  zhanlu-core, and zhanlu-vs refs. Apply that exact plan with
+  for the four native-Agent components plus distinct selected zhanlu-code and
+  zhanlu-core refs. Include zhanlu-vs only when a legacy source is selected. Apply that exact plan with
   `--portal-source-sync --confirmed-source-plan`; never add `--all-refs`.
 - Keep the GitHub Release as draft unless the user explicitly requests
   publication.
-- Sync the five component GitLab repositories for formal releases; do not sync
-  them for development releases.
+- Sync the four native-Agent component GitLab repositories for formal releases,
+  plus zhanlu-vs only when selected; do not sync them for development releases.
 - Wait for the selected workflow runs to finish unless the user asks to return
   immediately after dispatch.
 
@@ -54,13 +54,13 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
 4. Ask the user to confirm that exact plan. Explain that applying it may push a
    component branches or tags from GitLab to GitHub, push a GitHub release
    tag/commit, create or edit a GitHub Release, create GitLab tags and releases
-   for five components, and dispatch workflows.
+   for the selected components, and dispatch workflows.
 5. Only after explicit confirmation in the current conversation, repeat the
    same command with `--apply`.
 6. During an interactive apply, run
    `sync-zhanlu-gitlab-to-github.sh --dry-run` first. For build-portal apply,
    the Worker must already have run `sync-zhanlu-selected-refs.sh --dry-run`
-   for all five `develop` refs plus distinct selected build refs. Apply only
+   for all required `develop` refs plus distinct selected build refs. Apply only
    that user-confirmed immutable plan. Continue to synchronization only when
    every preview succeeds; continue to release creation only when every
    synchronization succeeds.
@@ -102,7 +102,7 @@ python3 .agents/skills/zhanlu-build/scripts/zhanlu_build.py \
   --selected-source-sync --generate-only --no-wait --output json
 ```
 
-Use `--source-branch`, `--zhanlu-core-ref`, `--zhanlu-vs-ref`,
+Use `--workflow-ref`, `--source-branch`, `--zhanlu-core-ref`, `--zhanlu-vs-ref`,
 `--delivery-profile`, or `--time-patch` only when the user explicitly selects a
 non-default source or patch.
 
@@ -115,19 +115,19 @@ non-default source or patch.
   (partial/skipped refs) and exit code 2 (configuration/authentication failure)
   as blocking failures.
 - For direct interactive builds, use the synchronization script's
-  default-branch mode when all three build refs are `develop`; add `--all-refs`
+  default-branch mode when all selected build refs are `develop`; add `--all-refs`
   when one selects anything else. This legacy mirror-maintenance behavior does
   not apply to the build portal.
 - For portal builds, GitLab is authoritative. Before the first remote write,
-  preview all five component `develop` refs plus distinct selected build refs.
+  preview all required component `develop` refs plus distinct selected build refs.
   Update only those planned GitHub refs with exact
   `--force-with-lease=<ref>:<preview-sha>`. Never use an unconditional force
   push. Preserve the confirmed plan and resolved build commits for recovery.
-- Require the release checkout to be clean, on `master`, and equal to
-  `origin/master` after fetch.
+- Require the release checkout to be clean, on the selected workflow branch,
+  and equal to the corresponding origin branch after fetch.
 - Before formal GitLab synchronization, require `zhanlu-cloud`, `zhanlu-code`,
-  `zhanlu-core`, `zhanlu-loc`, and `zhanlu-vs` to be clean, on `develop`, and
-  equal to `origin/develop` after fetch.
+  `zhanlu-core`, and `zhanlu-loc` to be clean, on `develop`, and equal to
+  `origin/develop` after fetch; require the same for zhanlu-vs only when selected.
 - Load GitLab credentials from the process or the ignored workspace `.env`.
   Never print credentials or place them in command arguments.
 - Never enable `GITLAB_FORCE_TAG_UPDATE`; stop on conflicting existing tags.

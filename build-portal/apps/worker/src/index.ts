@@ -19,6 +19,7 @@ const POLL_MS = Number(process.env.WORKER_POLL_MS ?? 3000);
 const LEASE_MS = 10 * 60_000;
 const componentRepositories = ["zhanlu-cloud", "zhanlu-code", "zhanlu-core", "zhanlu-loc", "zhanlu-vs"] as const;
 const buildRepositories = ["zhanlu-code", "zhanlu-core", "zhanlu-vs"] as const;
+const requiredComponentRepositories = ["zhanlu-cloud", "zhanlu-code", "zhanlu-core", "zhanlu-loc"] as const; // zhanlu_change
 const workflowByPlatform = { macos: "stable-macos.yml", linux: "stable-linux.yml", windows: "stable-windows.yml" } as const;
 
 type RepositoryUrls = string | { github?: string; gitlab?: string };
@@ -34,7 +35,7 @@ function repositoryConfig(): Record<string, RepositoryUrls> {
   const raw = process.env.REPOSITORIES_JSON;
   if (!raw) throw new Error("REPOSITORIES_JSON is required");
   const value = JSON.parse(raw) as Record<string, RepositoryUrls>;
-  for (const name of ["vscodium", ...componentRepositories]) if (!value[name]) throw new Error(`repository URL missing for ${name}`);
+  for (const name of ["vscodium", ...requiredComponentRepositories]) if (!value[name]) throw new Error(`repository URL missing for ${name}`); // zhanlu_change - legacy zhanlu-vs config is optional
   return value;
 }
 
@@ -98,13 +99,23 @@ function storePreview(buildId: string, spec: BuildSpec, resolved: Record<string,
 
 function isDevelop(ref: string): boolean { return ref === "develop" || ref === "refs/heads/develop"; }
 
+// zhanlu_change start - zhanlu-vs is a legacy source input after the native Agent migration
+function selectedComponentRepositories(spec: BuildSpec): readonly string[] {
+  return spec.zhanluVsRef ? componentRepositories : requiredComponentRepositories;
+}
+
+function selectedBuildRepositories(spec: BuildSpec): readonly string[] {
+  return spec.zhanluVsRef ? buildRepositories : buildRepositories.slice(0, 2);
+}
+// zhanlu_change end
+
 export function portalSyncArguments(spec: BuildSpec, planFile: string): string[] {
   const args = ["./scripts/sync-zhanlu-selected-refs.sh", "--dry-run"];
-  for (const repository of componentRepositories) args.push("--ref", `${repository}=develop`);
+  for (const repository of selectedComponentRepositories(spec)) args.push("--ref", `${repository}=develop`); // zhanlu_change
   const selected: Array<[string, string]> = [
     ["zhanlu-code", spec.sourceBranch],
     ["zhanlu-core", spec.zhanluCoreRef],
-    ["zhanlu-vs", spec.zhanluVsRef],
+    ...(spec.zhanluVsRef ? [["zhanlu-vs", spec.zhanluVsRef] as [string, string]] : []), // zhanlu_change
   ];
   for (const [repository, ref] of selected) if (!isDevelop(ref)) args.push("--ref", `${repository}=${ref}`);
   args.push("--output-plan", planFile);
@@ -122,10 +133,11 @@ export function parseSourcePlan(contents: string, spec: BuildSpec): { mirrorPlan
     return { repository, refType, requestedRef, sourceRef, destinationRef, gitlabSha, gitlabObjectSha, previousGithubSha: previous === "-" ? "" : previous, action };
   });
   const develop = new Set(mirrorPlan.filter((item) => item.destinationRef === "refs/heads/develop").map((item) => item.repository));
-  if (develop.size !== 5 || componentRepositories.some((repository) => !develop.has(repository))) throw new Error("source plan does not contain all five develop refs");
-  const requested: Record<string, string> = { "zhanlu-code": spec.sourceBranch, "zhanlu-core": spec.zhanluCoreRef, "zhanlu-vs": spec.zhanluVsRef };
+  const expectedDevelop = selectedComponentRepositories(spec); // zhanlu_change
+  if (develop.size !== expectedDevelop.length || expectedDevelop.some((repository) => !develop.has(repository))) throw new Error(`source plan does not contain all ${expectedDevelop.length} required develop refs`);
+  const requested: Record<string, string> = { "zhanlu-code": spec.sourceBranch, "zhanlu-core": spec.zhanluCoreRef, ...(spec.zhanluVsRef ? { "zhanlu-vs": spec.zhanluVsRef } : {}) }; // zhanlu_change
   const sourceRefs: SourceRefs = {};
-  for (const repository of buildRepositories) {
+  for (const repository of selectedBuildRepositories(spec)) { // zhanlu_change
     const matches = mirrorPlan.filter((item) => item.repository === repository && (item.requestedRef === requested[repository] || (isDevelop(requested[repository]!) && item.destinationRef === "refs/heads/develop")));
     if (matches.length !== 1) throw new Error(`source plan did not resolve exactly one ${repository} build ref`);
     sourceRefs[repository] = matches[0]!;
@@ -166,10 +178,10 @@ async function prepareWorkspace(build: BuildRow): Promise<PreparedWorkspace> {
     await git([`--git-dir=${cache}`, "worktree", "add", "--force", "-B", branch, directory, `refs/remotes/origin/${branch}`]);
     worktrees.push({ cache, directory });
   };
-  await add("vscodium", "github", "master");
+  await add("vscodium", "github", build.spec.vscodiumRef); // zhanlu_change
   await configureReleaseGitIdentity(path.join(root, "vscodium"));
   if (build.spec.kind === "formal" && build.spec.syncGitLab) {
-    for (const repository of componentRepositories) await add(repository, "gitlab", "develop");
+    for (const repository of selectedComponentRepositories(build.spec)) await add(repository, "gitlab", "develop"); // zhanlu_change
   }
   return { root, worktrees };
 }

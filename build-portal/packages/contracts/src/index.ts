@@ -33,16 +33,28 @@ export const buildRefSchema = z.string()
   .refine(isValidBuildRef, "请输入合法的 branch、tag、ref 或完整 40 位 commit SHA")
   .transform(canonicalBuildRef);
 
+// zhanlu_change start - let the portal select the workflow branch independently from source refs
+export const workflowBranchSchema = z.string()
+  .trim()
+  .min(1, "工作流分支不能为空")
+  .max(200, "工作流分支不能超过 200 个字符")
+  .transform((value) => value.startsWith("refs/heads/") ? value.slice("refs/heads/".length) : value)
+  .refine((value) => isValidBuildRef(value) && !fullCommitPattern.test(value) && !value.startsWith("refs/"), "请输入合法的 branch 名称");
+
+const optionalBuildRefSchema = z.union([z.literal(""), buildRefSchema]).default("");
+// zhanlu_change end
+
 const rawBuildSpecSchema = z.object({
   kind: z.enum(["development", "formal"]),
   version: z.string().regex(/^v?\d+\.\d+\.\d+$/),
   timePatch: z.string().regex(/^\d{1,4}$/).optional(),
   platform: z.enum(platforms).default("all"),
+  vscodiumRef: workflowBranchSchema.default("master"), // zhanlu_change
   // Kept as sourceBranch for workflow/API compatibility; this is the zhanlu-code ref.
   sourceBranch: buildRefSchema.default("develop"),
   deliveryProfile: z.string().min(1).max(100).default("default"),
   zhanluCoreRef: buildRefSchema.default("develop"),
-  zhanluVsRef: buildRefSchema.default("develop"),
+  zhanluVsRef: optionalBuildRefSchema, // zhanlu_change - legacy VSIX source is optional after native Agent migration
   bundleCodexRuntime: z.boolean().default(false),
   outputMode: z.enum(["release", "workflow-artifact"]).default("release"),
   triggerOnly: z.boolean().default(false),

@@ -12,6 +12,7 @@
 #   --generate      仅生成 assets，不发布到 Release
 #   --force         强制更新版本信息
 #   --platform      指定平台 (macos|linux|windows|all)，默认 all
+#   --workflow-ref  VSCodium 工作流分支，默认当前分支
 #   --source-branch    zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
 #   --zhanlu-core-ref zhanlu-core 仓库分支或 commit，默认使用 upstream/stable.json 中的 commit
 #   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
@@ -41,7 +42,7 @@ WORKFLOW_REF="${WORKFLOW_REF:-}"
 # zhanlu_change end
 # zhanlu-core 分支 / tag / commit（为空时回退到 upstream/stable.json commit）
 ZHANLU_CORE_REF=""
-# zhanlu_change start - allow release operators to pin the bundled zhanlu-vs source
+# zhanlu_change start - allow release operators to pin the optional legacy zhanlu-vs source
 ZHANLU_VS_REF=""
 ZHANLU_BUNDLE_CODEX_RUNTIME="${ZHANLU_BUNDLE_CODEX_RUNTIME:-0}"
 # zhanlu_change end
@@ -88,10 +89,11 @@ VSCodium Stable 版本手动触发脚本
   --generate      仅生成 assets，不发布到 Release
   --force         强制更新版本信息
   --platform      指定平台 (macos|linux|windows|all)，默认 all
+  --workflow-ref  VSCodium 工作流分支，默认当前分支
   --source-branch    zhanlu-code 分支，默认 develop
   --delivery-profile 定向交付 Profile，默认 default
   --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
-  --zhanlu-vs-ref   zhanlu-vs 分支、标签或 commit/ref，默认使用 develop
+  --zhanlu-vs-ref   可选的旧 zhanlu-vs 分支、标签或 commit/ref；留空则不构建 VSIX
   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
   --version-time-patch 指定内部 VS Code 兼容版本的 4 位补丁号（可用 VERSION_TIME_PATCH 环境变量）
@@ -169,6 +171,12 @@ while [[ $# -gt 0 ]]; do
             SOURCE_BRANCH="$2"
             shift 2
             ;;
+        # zhanlu_change start - select the branch that owns the workflow definition
+        --workflow-ref)
+            WORKFLOW_REF="$2"
+            shift 2
+            ;;
+        # zhanlu_change end
         --delivery-profile)
             DELIVERY_PROFILE="$2"
             shift 2
@@ -521,12 +529,12 @@ trigger_workflow() {
     else
         print_info "zhanlu-core Ref: 使用 upstream/stable.json 中的 commit"
     fi
-    # zhanlu_change start - pass zhanlu-vs refs to platform workflows
+    # zhanlu_change start - pass the optional legacy zhanlu-vs ref to platform workflows
     if [[ -n "${ZHANLU_VS_REF}" ]]; then
         wf_fields+=(-f "zhanlu_vs_ref=${ZHANLU_VS_REF}")
         print_info "zhanlu-vs Ref: ${ZHANLU_VS_REF}"
     else
-        print_info "zhanlu-vs Ref: 默认 develop"
+        print_info "zhanlu-vs Ref: 未选择（原生 Agent 架构）"
     fi
     # zhanlu_change end
 
@@ -609,7 +617,7 @@ main() {
     if [[ -n "${ZHANLU_VS_REF}" ]]; then
         print_info "zhanlu-vs Ref: $ZHANLU_VS_REF"
     else
-        print_info "zhanlu-vs Ref: 默认 develop"
+        print_info "zhanlu-vs Ref: 未选择（原生 Agent 架构）"
     fi
     # zhanlu_change end
     print_info "仅生成 assets: $GENERATE_ONLY"

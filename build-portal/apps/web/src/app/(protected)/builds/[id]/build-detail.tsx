@@ -54,7 +54,9 @@ export function BuildDetail() {
 
     <section className="panel build-summary-panel">
       <div className="panel-heading"><h2>确认内容</h2><span className="muted">{build.requested_by_username ?? "系统"}</span></div>
-      <div className="detail-facts compact-facts"><div><span>版本 / time patch</span><strong>{resolved.releaseVersion ?? "—"} / {resolved.timePatch ?? "—"}</strong></div><div><span>交付配置</span><strong>{resolved.deliveryProfile ?? spec.deliveryProfile}</strong></div><div><span>产物</span><strong>{spec.outputMode === "workflow-artifact" ? "工作流制品" : "Release"}</strong></div><div><span>源码策略</span><strong>五仓 develop + 选定 Ref</strong></div></div>
+      {/* zhanlu_change start - surface the selected workflow and optional legacy VSIX source */}
+      <div className="detail-facts compact-facts"><div><span>版本 / time patch</span><strong>{resolved.releaseVersion ?? "—"} / {resolved.timePatch ?? "—"}</strong></div><div><span>构建流程</span><strong>vscodium@{spec.vscodiumRef ?? "master"}</strong></div><div><span>交付配置</span><strong>{resolved.deliveryProfile ?? spec.deliveryProfile}</strong></div><div><span>产物</span><strong>{spec.outputMode === "workflow-artifact" ? "工作流制品" : "Release"}</strong></div><div><span>源码策略</span><strong>{spec.zhanluVsRef ? "五仓 develop + 选定 Ref" : "四仓 develop + Code/Core Ref（无旧 VSIX）"}</strong></div></div>
+      {/* zhanlu_change end */}
       <div className="section-heading"><h3>不可变同步计划</h3><span>GitLab SHA → GitHub 目标 Ref（精确 lease）</span></div>
       {mirrorPlan.length ? <div className="source-ref-table" role="table">
         <div className="source-ref-head" role="row"><span>仓库</span><span>请求引用</span><span>GitLab SHA</span><span>同步前 GitHub SHA</span><span>目标 Ref</span></div>

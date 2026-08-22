@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildRefSchema, buildSpecSchema, confirmationHash, resolveReleaseVersion } from "./index.js";
+import { buildRefSchema, buildSpecSchema, confirmationHash, resolveReleaseVersion, workflowBranchSchema } from "./index.js"; // zhanlu_change
 
-const development = { kind: "development", version: "1.4.1", platform: "linux", sourceBranch: "develop", deliveryProfile: "default", zhanluCoreRef: "develop", zhanluVsRef: "develop", bundleCodexRuntime: false, outputMode: "workflow-artifact", triggerOnly: false, syncGitLab: false, publish: false } as const;
+const development = { kind: "development", version: "1.4.1", platform: "linux", vscodiumRef: "dev-agent-host", sourceBranch: "develop", deliveryProfile: "default", zhanluCoreRef: "develop", zhanluVsRef: "", bundleCodexRuntime: false, outputMode: "workflow-artifact", triggerOnly: false, syncGitLab: false, publish: false } as const; // zhanlu_change
 
 test("development version resolution is deterministic with explicit time patch", () => {
   assert.deepEqual(resolveReleaseVersion({ ...development, timePatch: "61" }), { releaseVersion: "1.4.10061", timePatch: "0061" });
@@ -27,4 +27,10 @@ test("build refs reject unsafe or ambiguous values", () => {
   for (const value of ["", "feature release", "feature;echo", "feature..release", "feature~release"]) {
     assert.equal(buildRefSchema.safeParse(value).success, false, value);
   }
+});
+
+test("workflow branch is explicit while legacy zhanlu-vs is optional", () => {
+  assert.equal(workflowBranchSchema.parse(" refs/heads/dev-agent-host "), "dev-agent-host");
+  assert.equal(buildSpecSchema.parse(development).zhanluVsRef, "");
+  for (const value of ["", "refs/tags/v1.4.1", "a".repeat(40)]) assert.equal(workflowBranchSchema.safeParse(value).success, false, value);
 });

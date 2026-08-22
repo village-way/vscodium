@@ -27,6 +27,7 @@ COMPONENT_REPOS = (
     "zhanlu-loc",
     "zhanlu-vs",
 )
+REQUIRED_COMPONENT_REPOS = COMPONENT_REPOS[:-1]  # zhanlu_change - native Agent no longer requires zhanlu-vs
 WORKFLOWS = {
     "macos": "stable-macos.yml",
     "linux": "stable-linux.yml",
@@ -47,6 +48,7 @@ class Config:
     kind: str
     version: str
     time_patch: str | None
+    workflow_ref: str  # zhanlu_change
     source_branch: str
     delivery_profile: str
     zhanlu_core_ref: str
@@ -88,13 +90,18 @@ class ReleasePlan:
     @property
     def source_sync_all_refs(self) -> bool:
         return not (self.config.selected_source_sync or self.config.portal_source_sync) and any(
-            ref != "develop"
+            ref and ref != "develop"  # zhanlu_change
             for ref in (
                 self.config.source_branch,
                 self.config.zhanlu_core_ref,
                 self.config.zhanlu_vs_ref,
             )
         )
+
+
+def component_repositories(plan: ReleasePlan) -> tuple[str, ...]:
+    """Return the component set required by the selected Agent architecture."""
+    return COMPONENT_REPOS if plan.config.zhanlu_vs_ref else REQUIRED_COMPONENT_REPOS  # zhanlu_change
 
 
 @dataclass(frozen=True)
@@ -159,10 +166,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--version", required=True, help="Base/exact Zhanlu version")
     result.add_argument("--time-patch", help="Explicit internal patch, 1-4 digits")
     result.add_argument("--workspace", type=Path, default=default_workspace())
+    result.add_argument("--workflow-ref", default="master", help="VSCodium workflow branch")  # zhanlu_change
     result.add_argument("--source-branch", default="develop")
     result.add_argument("--delivery-profile", default="default")
     result.add_argument("--zhanlu-core-ref", default="develop")
-    result.add_argument("--zhanlu-vs-ref", default="develop")
+    result.add_argument("--zhanlu-vs-ref", default="")  # zhanlu_change - optional legacy VSIX source
     result.add_argument(
         "--bundle-codex-runtime", choices=("0", "1"), default="0",
         help="Bundle the optional Codex CLI runtime (default: 0)",
@@ -190,12 +198,12 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--selected-source-sync",
         action="store_true",
-        help="Synchronize only the three explicitly selected component refs",
+        help="Synchronize only the explicitly selected component refs",  # zhanlu_change
     )
     result.add_argument(
         "--portal-source-sync",
         action="store_true",
-        help="Apply a confirmed five-develop plus selected-ref portal plan",
+        help="Apply a confirmed required-develop plus selected-ref portal plan",  # zhanlu_change
     )
     result.add_argument("--confirmed-source-plan", type=Path, help=argparse.SUPPRESS)
     result.add_argument("--source-commit", help=argparse.SUPPRESS)
@@ -226,6 +234,7 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         kind=args.kind,
         version=args.version,
         time_patch=args.time_patch,
+        workflow_ref=args.workflow_ref,
         source_branch=args.source_branch,
         delivery_profile=args.delivery_profile,
         zhanlu_core_ref=args.zhanlu_core_ref,
@@ -352,6 +361,7 @@ def validate_native_scripts(plan: ReleasePlan) -> None:
             raise BuildError(f"create-release.sh lacks required capability: {token}")
     for token in (
         "--delivery-profile)",
+        "--workflow-ref)",  # zhanlu_change
         "--zhanlu-vs-ref)",
         "--bundle-codex-runtime)",
         "--version-time-patch)",
@@ -388,15 +398,10 @@ def selected_source_sync_command(
 ) -> list[str]:
     command = ["bash", "./scripts/sync-zhanlu-selected-refs.sh"]
     if dry_run:
-        command.extend(
-            [
-                "--dry-run",
-                "--ref", f"zhanlu-code={plan.config.source_branch}",
-                "--ref", f"zhanlu-core={plan.config.zhanlu_core_ref}",
-                "--ref", f"zhanlu-vs={plan.config.zhanlu_vs_ref}",
-                "--output-plan", str(plan_file),
-            ]
-        )
+        command.extend(["--dry-run", "--ref", f"zhanlu-code={plan.config.source_branch}", "--ref", f"zhanlu-core={plan.config.zhanlu_core_ref}"])
+        if plan.config.zhanlu_vs_ref:  # zhanlu_change
+            command.extend(["--ref", f"zhanlu-vs={plan.config.zhanlu_vs_ref}"])
+        command.extend(["--output-plan", str(plan_file)])
     else:
         command.extend(["--apply-plan", str(plan_file)])
     return command
@@ -435,14 +440,14 @@ def trigger_command(
         "bash",
         "./scripts/trigger-stable-release.sh",
         "--workflow",
+        "--workflow-ref",
+        plan.config.workflow_ref,
         "--source-branch",
         plan.config.source_branch,
         "--delivery-profile",
         plan.config.delivery_profile,
         "--zhanlu-core-ref",
         core_ref,
-        "--zhanlu-vs-ref",
-        vs_ref,
         "--bundle-codex-runtime",
         plan.config.bundle_codex_runtime,
         "--platform",
@@ -452,6 +457,8 @@ def trigger_command(
         "--version-time-patch",
         plan.version_time_patch,
     ]
+    if vs_ref:  # zhanlu_change
+        command.extend(["--zhanlu-vs-ref", vs_ref])
     if plan.config.generate_only:
         command.append("--generate")
     if plan.config.request_id:
@@ -511,6 +518,7 @@ def plan_document(
         "releaseVersion": plan.release_version,
         "versionTimePatch": plan.version_time_patch,
         "sourceBranch": plan.config.source_branch,
+        "vscodiumRef": plan.config.workflow_ref,  # zhanlu_change
         "deliveryProfile": plan.config.delivery_profile,
         "zhanluCoreRef": plan.config.zhanlu_core_ref,
         "zhanluVsRef": plan.config.zhanlu_vs_ref,
@@ -546,6 +554,8 @@ def safe_environment(
             "RELEASE_DATE": plan.release_date,
             "GITLAB_FORCE_TAG_UPDATE": "false",
             "ZHANLU_BUNDLE_CODEX_RUNTIME": plan.config.bundle_codex_runtime,
+            "WORKFLOW_REF": plan.config.workflow_ref,  # zhanlu_change
+            "GITLAB_RELEASE_REPOS": " ".join(component_repositories(plan)),  # zhanlu_change
         }
     )
     source_commit = (
@@ -680,6 +690,7 @@ def print_plan(
     print(f"  release version: {plan.release_version}", file=output)
     print(f"  internal time patch: {plan.version_time_patch}", file=output)
     print(f"  source branch: {plan.config.source_branch}", file=output)
+    print(f"  vscodium workflow branch: {plan.config.workflow_ref}", file=output)  # zhanlu_change
     print(f"  zhanlu-core ref: {plan.config.zhanlu_core_ref}", file=output)
     print(f"  zhanlu-vs ref: {plan.config.zhanlu_vs_ref}", file=output)
     print(f"  bundle Codex runtime: {plan.config.bundle_codex_runtime}", file=output)
@@ -710,11 +721,11 @@ def print_plan(
         )
     print(f"  wait for workflows: {'no' if plan.config.no_wait else 'yes'}", file=output)
 
-    state, branch, sha = local_repo_snapshot(runner, plan.release_repo, "master")
+    state, branch, sha = local_repo_snapshot(runner, plan.release_repo, plan.config.workflow_ref)  # zhanlu_change
     print("Local repository snapshot (no fetch):", file=output)
     print(f"  vscodium: state={state} branch={branch} sha={sha}", file=output)
     if plan.gitlab_sync:
-        for name in COMPONENT_REPOS:
+        for name in component_repositories(plan):  # zhanlu_change
             state, branch, sha = local_repo_snapshot(
                 runner, plan.config.workspace / name, "develop"
             )
@@ -808,7 +819,7 @@ def preflight_apply(
     if plan.gitlab_sync:
         require_tool("glab")
 
-    release_sha = require_synced_repo(runner, plan.release_repo, "master")
+    release_sha = require_synced_repo(runner, plan.release_repo, plan.config.workflow_ref)  # zhanlu_change
     print(f"Preflight vscodium: {release_sha}", file=output)
 
     if plan.gitlab_sync:
@@ -821,7 +832,7 @@ def preflight_apply(
                 "formal GitLab sync requires GITLAB_TOKEN or GITLAB_ACCESS_TOKEN "
                 "in the process or workspace .env"
             )
-        for name in COMPONENT_REPOS:
+        for name in component_repositories(plan):  # zhanlu_change
             sha = require_synced_repo(
                 runner, plan.config.workspace / name, "develop"
             )
@@ -991,7 +1002,7 @@ def portal_source_plan(
     plan: ReleasePlan, path: Path
 ) -> tuple[list[ResolvedSourceRef], dict[str, ResolvedSourceRef]]:
     rows = parse_selected_ref_plan_rows(path)
-    expected_repositories = set(COMPONENT_REPOS)
+    expected_repositories = set(component_repositories(plan))  # zhanlu_change
     develop_rows = {
         item.repository: item
         for item in rows
@@ -999,12 +1010,12 @@ def portal_source_plan(
     }
     if set(develop_rows) != expected_repositories:
         raise BuildError(
-            "portal source plan must contain develop for all five components"
+            f"portal source plan must contain develop for all {len(expected_repositories)} selected components"
         )
     selected_requests = {
         "zhanlu-code": plan.config.source_branch,
         "zhanlu-core": plan.config.zhanlu_core_ref,
-        "zhanlu-vs": plan.config.zhanlu_vs_ref,
+        **({"zhanlu-vs": plan.config.zhanlu_vs_ref} if plan.config.zhanlu_vs_ref else {}),  # zhanlu_change
     }
     selected: dict[str, ResolvedSourceRef] = {}
     for repository, requested in selected_requests.items():
@@ -1020,7 +1031,7 @@ def portal_source_plan(
     destinations = [(item.repository, item.destination_ref) for item in rows]
     if len(set(destinations)) != len(destinations):
         raise BuildError("portal source plan contains duplicate destination refs")
-    expected_count = 5 + sum(
+    expected_count = len(expected_repositories) + sum(  # zhanlu_change
         requested not in ("develop", "refs/heads/develop")
         for requested in selected_requests.values()
     )

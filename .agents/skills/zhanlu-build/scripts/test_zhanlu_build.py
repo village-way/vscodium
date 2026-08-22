@@ -155,6 +155,7 @@ class ZhanluBuildTest(unittest.TestCase):
         (self.release_repo / "scripts" / "trigger-stable-release.sh").write_text(
             "case x in\n"
             "--delivery-profile) ;;\n"
+            "--workflow-ref) ;;\n"  # zhanlu_change
             "--zhanlu-vs-ref) ;;\n"
             "--bundle-codex-runtime) ;;\n"
             "--version-time-patch) ;;\n"
@@ -187,6 +188,7 @@ class ZhanluBuildTest(unittest.TestCase):
             "kind": "development",
             "version": "1.4.1",
             "time_patch": "5061",
+            "workflow_ref": "master",  # zhanlu_change
             "source_branch": "develop",
             "delivery_profile": "default",
             "zhanlu_core_ref": "develop",
@@ -349,6 +351,25 @@ class ZhanluBuildTest(unittest.TestCase):
         self.assertIn('"mirrorPlan"', output)
         self.assertNotIn("--all-refs", " ".join(selected_calls[0][0]))
 
+    def test_portal_native_agent_plan_requires_only_four_components(self):
+        plan_file = self.workspace / "native-confirmed.tsv"
+        rows = []
+        for number, repository in enumerate(zhanlu_build.REQUIRED_COMPONENT_REPOS, start=1):
+            source_sha = format(number, "x") * 40
+            rows.append("\t".join([
+                repository, "branch", "develop", "refs/heads/develop",
+                "refs/heads/develop", source_sha, source_sha, "f" * 40,
+                "update",
+            ]))
+        plan_file.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        plan = zhanlu_build.make_plan(self.config(
+            zhanlu_vs_ref="", portal_source_sync=True,
+            confirmed_source_plan=plan_file,
+        ))
+        mirror_plan, selected = zhanlu_build.portal_source_plan(plan, plan_file)
+        self.assertEqual(len(mirror_plan), 4)
+        self.assertEqual(set(selected), {"zhanlu-code", "zhanlu-core"})
+
     def test_trigger_only_reuses_persisted_source_commits(self):
         plan = zhanlu_build.make_plan(
             self.config(
@@ -380,6 +401,17 @@ class ZhanluBuildTest(unittest.TestCase):
             ["--kind", "development", "--version", "1.4.1"]
         )
         self.assertEqual(config.bundle_codex_runtime, "0")
+        self.assertEqual(config.workflow_ref, "master")
+        self.assertEqual(config.zhanlu_vs_ref, "")
+
+    def test_native_agent_omits_legacy_vs_from_sync_and_dispatch(self):
+        plan = zhanlu_build.make_plan(self.config(workflow_ref="dev-agent-host", zhanlu_vs_ref="", selected_source_sync=True))
+        command = zhanlu_build.selected_source_sync_command(plan, dry_run=True, plan_file=Path("plan.tsv"))
+        self.assertNotIn("zhanlu-vs=", " ".join(command))
+        trigger = zhanlu_build.trigger_command(plan)
+        self.assertEqual(trigger[trigger.index("--workflow-ref") + 1], "dev-agent-host")
+        self.assertNotIn("--zhanlu-vs-ref", trigger)
+        self.assertEqual(zhanlu_build.component_repositories(plan), zhanlu_build.REQUIRED_COMPONENT_REPOS)
 
     def test_portal_contract_propagates_request_id_and_generate_only(self):
         config = zhanlu_build.parse_config(

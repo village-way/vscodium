@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { buildArguments, redact, runRelease } from "./index.js";
 
-const spec = { kind: "development", version: "1.4.1", platform: "linux", sourceBranch: "develop", deliveryProfile: "default", zhanluCoreRef: "develop", zhanluVsRef: "develop", bundleCodexRuntime: false, outputMode: "workflow-artifact", triggerOnly: false, syncGitLab: false, publish: false } as const;
-test("portal invokes wrapper with a confirmed source plan", () => { const args = buildArguments(spec, "request-1", "/work", true, "/work/plan.tsv"); assert.ok(args.includes("--request-id")); assert.ok(args.includes("--generate-only")); assert.ok(args.includes("--apply")); assert.ok(args.includes("--no-wait")); assert.ok(args.includes("--portal-source-sync")); assert.equal(args[args.indexOf("--confirmed-source-plan") + 1], "/work/plan.tsv"); assert.equal(args.includes("--all-refs"), false); });
+const spec = { kind: "development", version: "1.4.1", platform: "linux", vscodiumRef: "dev-agent-host", sourceBranch: "develop", deliveryProfile: "default", zhanluCoreRef: "develop", zhanluVsRef: "", bundleCodexRuntime: false, outputMode: "workflow-artifact", triggerOnly: false, syncGitLab: false, publish: false } as const; // zhanlu_change
+test("portal invokes wrapper with workflow branch and no retired VSIX source", () => { const args = buildArguments(spec, "request-1", "/work", true, "/work/plan.tsv"); assert.equal(args[args.indexOf("--workflow-ref") + 1], "dev-agent-host"); assert.equal(args.includes("--zhanlu-vs-ref"), false); assert.ok(args.includes("--request-id")); assert.ok(args.includes("--generate-only")); assert.ok(args.includes("--apply")); assert.ok(args.includes("--no-wait")); assert.ok(args.includes("--portal-source-sync")); assert.equal(args[args.indexOf("--confirmed-source-plan") + 1], "/work/plan.tsv"); assert.equal(args.includes("--all-refs"), false); });
 test("confirmed dispatch forwards persisted source commits", () => {
   const sourceRefs = {
     "zhanlu-code": { repository: "zhanlu-code", refType: "branch", requestedRef: "develop", sourceRef: "refs/heads/develop", destinationRef: "refs/heads/develop", gitlabSha: "a".repeat(40), gitlabObjectSha: "a".repeat(40), previousGithubSha: "d".repeat(40), action: "update" },
     "zhanlu-core": { repository: "zhanlu-core", refType: "branch", requestedRef: "develop", sourceRef: "refs/heads/develop", destinationRef: "refs/heads/develop", gitlabSha: "b".repeat(40), gitlabObjectSha: "b".repeat(40), previousGithubSha: "e".repeat(40), action: "update" },
     "zhanlu-vs": { repository: "zhanlu-vs", refType: "branch", requestedRef: "develop", sourceRef: "refs/heads/develop", destinationRef: "refs/heads/develop", gitlabSha: "c".repeat(40), gitlabObjectSha: "c".repeat(40), previousGithubSha: "f".repeat(40), action: "update" },
   };
-  const args = buildArguments(spec, "request-2", "/work", true, "/work/plan.tsv", sourceRefs);
+  const args = buildArguments({ ...spec, zhanluVsRef: "develop" }, "request-2", "/work", true, "/work/plan.tsv", sourceRefs);
   assert.equal(args[args.indexOf("--source-commit") + 1], "a".repeat(40));
   assert.equal(args[args.indexOf("--zhanlu-core-commit") + 1], "b".repeat(40));
   assert.equal(args[args.indexOf("--zhanlu-vs-commit") + 1], "c".repeat(40));
