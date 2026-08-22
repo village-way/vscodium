@@ -565,6 +565,16 @@ jobs:
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - CLI compatibility assets now consume the Agent workspace from zhanlu-core
+      - name: Clone VSCode repo
+        env:
+          VSCODE_REPO: origin
+          ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+        run: ./get_repo.sh
+        if: env.SHOULD_BUILD == 'yes'
+      # zhanlu_change end
+
       - name: Setup Node.js environment
         uses: actions/setup-node@v6
         with:
