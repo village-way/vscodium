@@ -47,7 +47,7 @@ on:
       # zhanlu_change start - allow manually triggered releases to pin bundled zhanlu-vs source
       zhanlu_vs_ref:
         type: string
-        description: Branch, tag, commit, or ref of zhanlu-vs to fetch (optional)
+        description: Non-empty uses the legacy zhanlu-vs VSIX; empty uses the native Agent from zhanlu-core
       bundle_codex_runtime:
         type: choice
         description: Bundle the optional Codex CLI runtime
@@ -383,7 +383,7 @@ jobs:
       # zhanlu_change start - restore the Agent source before the fetched Code scripts consume it
       - name: Restore Agent source from zhanlu-core artifact
         run: ./scripts/restore-zhanlu-agent-source.sh
-        if: env.SHOULD_BUILD == 'yes'
+        if: env.SHOULD_BUILD == 'yes' && env.ZHANLU_VS_REF == ''
       # zhanlu_change end
 
       - name: Write root .env for zhanlu-vs

@@ -772,6 +772,45 @@ class ZhanluBuildTest(unittest.TestCase):
         self.assertFalse(success)
         self.assertIn("failed jobs: build x64", output.getvalue())
 
+    # zhanlu_change start - keep the stable workflows compatible with both Agent architectures
+    def test_stable_workflows_document_the_agent_mode_selector(self):
+        for platform in ("macos", "linux", "windows"):
+            workflow = (
+                REPOSITORY_ROOT / ".github" / "workflows" / f"stable-{platform}.yml"
+            ).read_text(encoding="utf-8")
+            self.assertIn("ZHANLU_VS_REF:", workflow)
+            self.assertIn(
+                "Non-empty uses the legacy zhanlu-vs VSIX; empty uses the native Agent from zhanlu-core",
+                workflow,
+            )
+
+    def test_core_agent_restore_steps_are_native_only(self):
+        for platform in ("linux", "windows"):
+            workflow = (
+                REPOSITORY_ROOT / ".github" / "workflows" / f"stable-{platform}.yml"
+            ).read_text(encoding="utf-8")
+            step_blocks = workflow.split("\n      - name: ")[1:]
+            native_steps = [
+                block
+                for block in step_blocks
+                if "restore-zhanlu-agent-source.sh" in block.split("\n      - name: ", 1)[0]
+                or block.startswith("Download zhanlu-core artifact for Agent")
+            ]
+            self.assertTrue(native_steps, platform)
+            for block in native_steps:
+                self.assertIn("env.ZHANLU_VS_REF == ''", block, platform)
+
+    def test_linux_arm32_is_disabled_only_for_the_native_agent(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github" / "workflows" / "stable-linux.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}", workflow)
+        self.assertIn(
+            "(needs.check.outputs.ZHANLU_VS_REF == '' && matrix.slug == 'ARM32')",
+            workflow,
+        )
+    # zhanlu_change end
+
 
 if __name__ == "__main__":
     unittest.main()

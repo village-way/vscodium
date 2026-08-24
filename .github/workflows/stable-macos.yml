@@ -43,7 +43,7 @@ on:
       # zhanlu_change start - allow manually triggered releases to pin bundled zhanlu-vs source
       zhanlu_vs_ref:
         type: string
-        description: Branch, tag, commit, or ref of zhanlu-vs to fetch (optional)
+        description: Non-empty uses the legacy zhanlu-vs VSIX; empty uses the native Agent from zhanlu-core
       bundle_codex_runtime:
         type: choice
         description: Bundle the optional Codex CLI runtime
