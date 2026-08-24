@@ -43,7 +43,7 @@ on:
       # zhanlu_change start - allow manually triggered releases to pin bundled zhanlu-vs source
       zhanlu_vs_ref:
         type: string
-        description: Branch, tag, commit, or ref of zhanlu-vs to fetch (optional)
+        description: Non-empty uses the legacy zhanlu-vs VSIX; empty uses the native Agent from zhanlu-core
       bundle_codex_runtime:
         type: choice
         description: Bundle the optional Codex CLI runtime
@@ -98,6 +98,7 @@ jobs:
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
       VSCODE_VERSION: ${{ env.VSCODE_VERSION }} # zhanlu_change - pass internal package version to Linux asset packaging
       ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ env.ZHANLU_BUNDLE_CODEX_RUNTIME }} # zhanlu_change - gate native Bridge preparation
+      ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change - expose the Agent architecture selector to dependent jobs
 
     steps:
       - uses: actions/checkout@v6
@@ -400,10 +401,12 @@ jobs:
       image: ${{ matrix.image }}
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
+      # zhanlu_change start - only the native Agent adds an ARM32 restriction; preserve existing platform gates
       # ARM32: the native Agent requires zl, which has no Linux ARM32 binary.
       # PPC64: no matching Electron ppc64le binary (lex-ibm only provides 37.2.3).
       # RISCV64/LOONG64: arch-2/arch-3 patches don't apply to zhanlu-core; gulp tasks missing.
-      DISABLED: ${{ (matrix.slug == 'ARM32' || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64') && 'yes' || vars[format('DISABLE_STABLE_LINUX_APP_{0}', matrix.slug)] }}
+      DISABLED: ${{ ((needs.check.outputs.ZHANLU_VS_REF == '' && matrix.slug == 'ARM32') || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64') && 'yes' || vars[format('DISABLE_STABLE_LINUX_APP_{0}', matrix.slug)] }}
+      # zhanlu_change end
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
@@ -431,8 +434,8 @@ jobs:
         run: ./fetch_source.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      # zhanlu_change start - restore the Agent source before the fetched Code scripts consume it
-      - name: Download zhanlu-core artifact for Agent build
+      # zhanlu_change start - always restore the compiled Core artifact; native Agent additionally restores its source
+      - name: Download vscode artifact
         uses: actions/download-artifact@v8
         with:
           name: vscode
@@ -440,7 +443,7 @@ jobs:
 
       - name: Restore Agent source from zhanlu-core artifact
         run: ./scripts/restore-zhanlu-agent-source.sh
-        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.ZHANLU_VS_REF == ''
       # zhanlu_change end
 
       - name: Switch to relevant branch
@@ -730,8 +733,8 @@ jobs:
           bun-version: '1.3.14'
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      # zhanlu_change - restore the Agent source before building the target CLI
-      - name: Download zhanlu-core artifact for Agent CLI build
+      # Always restore the compiled Core artifact; native Agent additionally restores its source.
+      - name: Download vscode artifact
         uses: actions/download-artifact@v8
         with:
           name: vscode
@@ -739,7 +742,7 @@ jobs:
 
       - name: Restore Agent source from zhanlu-core artifact
         run: ./scripts/restore-zhanlu-agent-source.sh
-        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+        if: env.DISABLED != 'yes' && env.ZHANLU_VS_REF == '' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
       - name: Write root .env for zhanlu-vs
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
@@ -857,8 +860,8 @@ jobs:
           bun-version: '1.3.14'
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      # zhanlu_change - restore the Agent source before building the target CLI
-      - name: Download zhanlu-core artifact for Agent CLI build
+      # Always restore the compiled Core artifact; native Agent additionally restores its source.
+      - name: Download vscode artifact
         uses: actions/download-artifact@v8
         with:
           name: vscode
@@ -866,7 +869,7 @@ jobs:
 
       - name: Restore Agent source from zhanlu-core artifact
         run: ./scripts/restore-zhanlu-agent-source.sh
-        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+        if: env.DISABLED != 'yes' && env.ZHANLU_VS_REF == '' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
       - name: Write root .env for zhanlu-vs
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
