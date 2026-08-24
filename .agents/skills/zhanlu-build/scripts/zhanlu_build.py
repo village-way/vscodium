@@ -69,6 +69,7 @@ class Config:
     source_commit: str | None = None
     zhanlu_core_commit: str | None = None
     zhanlu_vs_commit: str | None = None
+    workflow_ref: str = "master"  # zhanlu_change - portal worker passes --workflow-ref
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--time-patch", help="Explicit internal patch, 1-4 digits")
     result.add_argument("--workspace", type=Path, default=default_workspace())
     result.add_argument("--source-branch", default="develop")
+    result.add_argument(
+        "--workflow-ref",
+        default="master",
+        help="vscodium branch that owns the workflow definition (default: master)",
+    )  # zhanlu_change
     result.add_argument("--delivery-profile", default="default")
     result.add_argument("--zhanlu-core-ref", default="develop")
     result.add_argument("--zhanlu-vs-ref", default="develop")
@@ -248,6 +254,7 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         source_commit=args.source_commit,
         zhanlu_core_commit=args.zhanlu_core_commit,
         zhanlu_vs_commit=args.zhanlu_vs_commit,
+        workflow_ref=args.workflow_ref,  # zhanlu_change
     )
 
 
@@ -546,6 +553,7 @@ def safe_environment(
             "RELEASE_DATE": plan.release_date,
             "GITLAB_FORCE_TAG_UPDATE": "false",
             "ZHANLU_BUNDLE_CODEX_RUNTIME": plan.config.bundle_codex_runtime,
+            "WORKFLOW_REF": plan.config.workflow_ref,  # zhanlu_change
         }
     )
     source_commit = (

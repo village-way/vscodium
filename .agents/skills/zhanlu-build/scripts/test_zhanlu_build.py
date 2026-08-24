@@ -396,6 +396,20 @@ class ZhanluBuildTest(unittest.TestCase):
         self.assertEqual(trigger[trigger.index("--output") + 1], "json")
         self.assertEqual(zhanlu_build.plan_document(plan)["schemaVersion"], "v1")
 
+    def test_portal_contract_accepts_workflow_ref_and_exports_it(self):
+        config = zhanlu_build.parse_config(
+            [
+                "--kind", "formal", "--version", "1.4.10",
+                "--workflow-ref", "master",
+                "--source-branch", "develop",
+                "--portal-source-sync",
+                "--confirmed-source-plan", "/tmp/plan.tsv",
+            ]
+        )
+        self.assertEqual(config.workflow_ref, "master")
+        environment = zhanlu_build.safe_environment(zhanlu_build.make_plan(config))
+        self.assertEqual(environment["WORKFLOW_REF"], "master")
+
     def test_generate_only_never_creates_or_reads_a_release(self):
         plan = zhanlu_build.make_plan(self.config(generate_only=True, apply=True))
         runner = FakeRunner()
