@@ -29,3 +29,4 @@ sign-local.sh
 Zhanlu-*.zip
 .zhanlu
 docs/stable-build-workflows.md
+**/__pycache__/
