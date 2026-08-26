@@ -71,10 +71,10 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
       requestId: randomUUID(),
       spec,
       resolved: {
-        refs: { sourceBranch: spec.sourceBranch, zhanluCoreRef: spec.zhanluCoreRef, zhanluVsRef: spec.zhanluVsRef },
+        refs: { sourceBranch: spec.sourceBranch, zhanluCoreRef: spec.zhanluCoreRef },
         deliveryProfile: spec.deliveryProfile,
         platforms: spec.platform === "all" ? ["macos", "linux", "windows"] : [spec.platform],
-        syncScope: "five-develop-plus-selected",
+        syncScope: "four-develop-plus-selected",
         githubVisibility: spec.publish ? "published" : "draft",
         syncGitLab: spec.kind === "formal" && spec.syncGitLab,
       },

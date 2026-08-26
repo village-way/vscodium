@@ -24,7 +24,7 @@ require_secret() {
 }
 
 repositories_json="$(require_secret "$deployment_env" REPOSITORIES_JSON)"
-printf '%s' "$repositories_json" | jq -e 'type == "object" and (has("vscodium") and has("zhanlu-cloud") and has("zhanlu-code") and has("zhanlu-core") and has("zhanlu-loc") and has("zhanlu-vs"))' >/dev/null || { echo "REPOSITORIES_JSON must include vscodium and all five components" >&2; exit 2; }
+printf '%s' "$repositories_json" | jq -e 'type == "object" and (has("vscodium") and has("zhanlu-cloud") and has("zhanlu-code") and has("zhanlu-core") and has("zhanlu-loc"))' >/dev/null || { echo "REPOSITORIES_JSON must include vscodium and all four components" >&2; exit 2; }
 [[ "$(require_secret "$deployment_env" GITHUB_APP_ID)" =~ ^[0-9]+$ ]] || { echo "GITHUB_APP_ID must be numeric" >&2; exit 2; }
 [[ "$(require_secret "$deployment_env" GITHUB_APP_INSTALLATION_ID)" =~ ^[0-9]+$ ]] || { echo "GITHUB_APP_INSTALLATION_ID must be numeric" >&2; exit 2; }
 

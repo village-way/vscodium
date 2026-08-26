@@ -155,7 +155,6 @@ class ZhanluBuildTest(unittest.TestCase):
         (self.release_repo / "scripts" / "trigger-stable-release.sh").write_text(
             "case x in\n"
             "--delivery-profile) ;;\n"
-            "--zhanlu-vs-ref) ;;\n"
             "--bundle-codex-runtime) ;;\n"
             "--version-time-patch) ;;\n"
             "esac\n",
@@ -190,7 +189,6 @@ class ZhanluBuildTest(unittest.TestCase):
             "source_branch": "develop",
             "delivery_profile": "default",
             "zhanlu_core_ref": "develop",
-            "zhanlu_vs_ref": "develop",
             "bundle_codex_runtime": "0",
             "platform": "all",
             "apply": False,
@@ -247,7 +245,6 @@ class ZhanluBuildTest(unittest.TestCase):
         trigger = zhanlu_build.trigger_command(plan)
         self.assertEqual(trigger[trigger.index("--platform") + 1], "all")
         self.assertEqual(trigger[trigger.index("--zhanlu-core-ref") + 1], "develop")
-        self.assertEqual(trigger[trigger.index("--zhanlu-vs-ref") + 1], "develop")
         self.assertEqual(trigger[trigger.index("--bundle-codex-runtime") + 1], "0")
         self.assertEqual(trigger[trigger.index("--release-version") + 1], "1.4.1")
         self.assertEqual(trigger[trigger.index("--version-time-patch") + 1], "5061")
@@ -266,7 +263,7 @@ class ZhanluBuildTest(unittest.TestCase):
 
     def test_custom_build_ref_synchronizes_all_refs(self):
         plan = zhanlu_build.make_plan(
-            self.config(zhanlu_vs_ref="feature/test")
+            self.config(zhanlu_core_ref="feature/test")
         )
         self.assertTrue(plan.source_sync_all_refs)
         self.assertIn(
@@ -278,8 +275,7 @@ class ZhanluBuildTest(unittest.TestCase):
             self.config(
                 selected_source_sync=True,
                 source_branch="feature/code",
-                zhanlu_core_ref="develop",
-                zhanlu_vs_ref="refs/tags/v2",
+                zhanlu_core_ref="refs/tags/v2",
             )
         )
         self.assertFalse(plan.source_sync_all_refs)
@@ -288,8 +284,7 @@ class ZhanluBuildTest(unittest.TestCase):
         )
         self.assertNotIn("--all-refs", command)
         self.assertIn("zhanlu-code=feature/code", command)
-        self.assertIn("zhanlu-core=develop", command)
-        self.assertIn("zhanlu-vs=refs/tags/v2", command)
+        self.assertIn("zhanlu-core=refs/tags/v2", command)
 
     def test_selected_sync_pins_workflow_refs_and_emits_source_refs(self):
         plan = zhanlu_build.make_plan(
@@ -298,7 +293,6 @@ class ZhanluBuildTest(unittest.TestCase):
                 selected_source_sync=True,
                 source_branch="feature/code",
                 zhanlu_core_ref="feature/core",
-                zhanlu_vs_ref="feature/vs",
                 output_format="json",
             )
         )
@@ -314,12 +308,11 @@ class ZhanluBuildTest(unittest.TestCase):
             runner, ["bash", "./scripts/trigger-stable-release.sh"]
         )[0]
         self.assertEqual(trigger[0][trigger[0].index("--zhanlu-core-ref") + 1], "2" * 40)
-        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-vs-ref") + 1], "3" * 40)
         self.assertEqual(trigger[2]["ZHANLU_DELIVERY_SOURCE_COMMIT"], "1" * 40)
         self.assertIn('"event": "source_refs_resolved"', output)
         self.assertIn('"sourceRefs"', output)
 
-    def test_portal_applies_only_the_confirmed_five_develop_plan(self):
+    def test_portal_applies_only_the_confirmed_four_develop_plan(self):
         plan_file = self.workspace / "confirmed.tsv"
         rows = []
         for number, repository in enumerate(zhanlu_build.COMPONENT_REPOS, start=1):
@@ -359,7 +352,6 @@ class ZhanluBuildTest(unittest.TestCase):
                 source_branch="feature/code",
                 source_commit="a" * 40,
                 zhanlu_core_commit="b" * 40,
-                zhanlu_vs_commit="c" * 40,
             )
         )
         runner = FakeRunner()
@@ -372,7 +364,6 @@ class ZhanluBuildTest(unittest.TestCase):
             runner, ["bash", "./scripts/trigger-stable-release.sh"]
         )[0]
         self.assertEqual(trigger[0][trigger[0].index("--zhanlu-core-ref") + 1], "b" * 40)
-        self.assertEqual(trigger[0][trigger[0].index("--zhanlu-vs-ref") + 1], "c" * 40)
         self.assertEqual(trigger[2]["ZHANLU_DELIVERY_SOURCE_COMMIT"], "a" * 40)
 
     def test_cli_defaults_codex_runtime_bundle_to_zero(self):
@@ -380,6 +371,15 @@ class ZhanluBuildTest(unittest.TestCase):
             ["--kind", "development", "--version", "1.4.1"]
         )
         self.assertEqual(config.bundle_codex_runtime, "0")
+
+    def test_cli_default_core_ref_matches_stable_source_pin(self):
+        config = zhanlu_build.parse_config(
+            ["--kind", "development", "--version", "1.4.1"]
+        )
+        stable = __import__("json").loads(
+            (REPOSITORY_ROOT / "upstream" / "stable.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(config.zhanlu_core_ref, stable["commit"])
 
     def test_portal_contract_propagates_request_id_and_generate_only(self):
         config = zhanlu_build.parse_config(

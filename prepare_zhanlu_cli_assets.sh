@@ -6,10 +6,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-ZHANLU_REPO_URL="${ZHANLU_REPO_URL:-https://github.com/village-way/zhanlu-vs.git}"
-ZHANLU_BRANCH="${ZHANLU_BRANCH:-develop}"
-ZHANLU_VS_REF="${ZHANLU_VS_REF:-}"
-ZHANLU_DIR="${SCRIPT_DIR}/zhanlu-vs"
+# zhanlu_change start - req-042 E1 builds compatibility CLI assets from the same core snapshot
+ZHANLU_SOURCE_MODE="zhanlu-core"
+ZHANLU_DIR="${SCRIPT_DIR}/vscode/zhanlu-agent"
+# zhanlu_change end
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 
 if [[ -z "${RELEASE_VERSION}" ]]; then
@@ -19,66 +19,31 @@ fi
 
 ZHANLU_CLI_VERSION="${RELEASE_VERSION%-insider}"
 
-if [[ -n "${ZHANLU_GITHUB_TOKEN:-}" && "${ZHANLU_REPO_URL}" =~ ^https://github\.com ]]; then
-  ZHANLU_REPO_URL="${ZHANLU_REPO_URL/https:\/\//https://${ZHANLU_GITHUB_TOKEN}@}"
-  echo "Using GitHub token for zhanlu-vs authentication"
-  git config --global credential.helper store
-  export GIT_TERMINAL_PROMPT=0
-  export GIT_ASKPASS=/bin/echo
-fi
+# zhanlu_change start - every compatibility CLI target is assembled from one resolved Profile.
+# The EXIT trap keeps the staging directory from leaking when a later target fails to build.
+source "${SCRIPT_DIR}/scripts/prepare_delivery_profile.sh"
+prepare_delivery_profile "${SCRIPT_DIR}"
+trap cleanup_delivery_profile EXIT
+# zhanlu_change end
 
 echo "=== Zhanlu CLI Compatibility Asset Builder ==="
-if [[ "${ZHANLU_REPO_URL}" =~ ^https://.*@github\.com ]]; then
-  DISPLAY_URL="${ZHANLU_REPO_URL/@*/@***}"
-  echo "ZHANLU_REPO_URL: ${DISPLAY_URL}"
-else
-  echo "ZHANLU_REPO_URL: ${ZHANLU_REPO_URL}"
-fi
-echo "ZHANLU_BRANCH: ${ZHANLU_BRANCH}"
-echo "ZHANLU_VS_REF: ${ZHANLU_VS_REF:-<default branch>}"
+echo "ZHANLU_SOURCE_MODE: ${ZHANLU_SOURCE_MODE}"
 echo "ZHANLU_DIR: ${ZHANLU_DIR}"
 echo "RELEASE_VERSION: ${RELEASE_VERSION}"
 echo "KILO_VERSION: ${ZHANLU_CLI_VERSION}"
 
-if [[ "${CI_BUILD:-}" != "no" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  git config --global --add safe.directory "${ZHANLU_DIR}" || true
-  export GIT_TERMINAL_PROMPT=0
+# zhanlu_change start - validate the resolved core snapshot; no retired repository fallback
+CORE_SOURCE_METADATA="${ZHANLU_DIR}/zhanlu-core-source.json"
+if [[ ! -f "${ZHANLU_DIR}/packages/opencode/package.json" || ! -f "${CORE_SOURCE_METADATA}" ]]; then
+  echo "Error: resolved zhanlu-core Agent workspace is incomplete; run get_repo.sh first"
+  exit 1
 fi
-
-if [[ "${GIT_LFS_FETCH:-}" != "1" ]]; then
-  export GIT_LFS_SKIP_SMUDGE=1
-  echo "Skipping LFS fetch (GIT_LFS_SKIP_SMUDGE=1)"
+ZHANLU_COMMIT="$(jq -r 'select(.repository == "zhanlu-core") | .commit // empty' "${CORE_SOURCE_METADATA}")"
+if [[ -z "${ZHANLU_COMMIT}" || "${ZHANLU_COMMIT}" != "${MS_COMMIT:-}" ]]; then
+  echo "Error: zhanlu-core Agent source hash does not match MS_COMMIT"
+  exit 1
 fi
-
-if [[ "${ZHANLU_FORCE_CLONE:-}" == "yes" && -d "${ZHANLU_DIR}" ]]; then
-  rm -rf "${ZHANLU_DIR}"
-fi
-
-if [[ -d "${ZHANLU_DIR}/.git" ]]; then
-  echo "Updating existing zhanlu-vs checkout"
-  git -C "${ZHANLU_DIR}" remote set-url origin "${ZHANLU_REPO_URL}"
-  if [[ -n "${ZHANLU_VS_REF}" ]]; then
-    git -C "${ZHANLU_DIR}" fetch --depth 1 origin "${ZHANLU_VS_REF}"
-    git -C "${ZHANLU_DIR}" checkout --detach FETCH_HEAD
-  else
-    git -C "${ZHANLU_DIR}" fetch --depth 1 origin "${ZHANLU_BRANCH}"
-    git -C "${ZHANLU_DIR}" checkout "${ZHANLU_BRANCH}" 2>/dev/null || git -C "${ZHANLU_DIR}" checkout -b "${ZHANLU_BRANCH}" "origin/${ZHANLU_BRANCH}"
-    git -C "${ZHANLU_DIR}" reset --hard "origin/${ZHANLU_BRANCH}"
-  fi
-else
-  echo "Cloning zhanlu-vs"
-  mkdir -p "${ZHANLU_DIR}"
-  git -C "${ZHANLU_DIR}" init -q
-  git -C "${ZHANLU_DIR}" remote add origin "${ZHANLU_REPO_URL}"
-  if [[ -n "${ZHANLU_VS_REF}" ]]; then
-    git -C "${ZHANLU_DIR}" fetch --depth 1 origin "${ZHANLU_VS_REF}"
-  else
-    git -C "${ZHANLU_DIR}" fetch --depth 1 origin "${ZHANLU_BRANCH}"
-  fi
-  git -C "${ZHANLU_DIR}" checkout --detach FETCH_HEAD
-fi
-
-ZHANLU_COMMIT="$(git -C "${ZHANLU_DIR}" rev-parse HEAD)"
+# zhanlu_change end
 echo "ZHANLU_COMMIT: ${ZHANLU_COMMIT}"
 
 if ! command -v bun >/dev/null 2>&1; then
@@ -86,7 +51,7 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Installing zhanlu-vs dependencies"
+echo "Installing Zhanlu Agent workspace dependencies"
 (cd "${ZHANLU_DIR}" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 bun install --frozen-lockfile || PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 bun install)
 
 echo "Building all opencode CLI targets"
@@ -94,11 +59,27 @@ echo "Building all opencode CLI targets"
   cd "${ZHANLU_DIR}/packages/opencode"
   unset KILO_RELEASE
   export KILO_VERSION="${ZHANLU_CLI_VERSION}"
+  export ZHANLU_BUNDLE_CODEX_RUNTIME=0
   bun run build
 )
 
+# zhanlu_change start - reject cross-target Profile drift before archives are created
+REFERENCE_BUNDLE_INDEX=""
+while IFS= read -r bundle_index; do
+  if [[ -z "${REFERENCE_BUNDLE_INDEX}" ]]; then
+    REFERENCE_BUNDLE_INDEX="${bundle_index}"
+  else
+    cmp "${REFERENCE_BUNDLE_INDEX}" "${bundle_index}"
+  fi
+done < <(find "${ZHANLU_DIR}/packages/opencode/dist" -path '*/bin/zhanlu-plugins/bundle-index.json' -type f | sort)
+if [[ -z "${REFERENCE_BUNDLE_INDEX}" ]]; then
+  echo "Error: no CLI distribution contains zhanlu-plugins/bundle-index.json"
+  exit 1
+fi
+# zhanlu_change end
+
 smoke_test_linux_x64_baseline() {
-  local binary="${ZHANLU_DIR}/packages/opencode/dist/@kilocode/cli-linux-x64-baseline/bin/zl"
+  local binary="${ZHANLU_DIR}/packages/opencode/dist/@zhanlucode/zl-linux-x64-baseline/bin/zl"
 
   case "$(uname -s)-$(uname -m)" in
     Linux-x86_64|Linux-amd64)
@@ -155,10 +136,11 @@ rm -f \
 
 smoke_test_linux_x64_baseline
 
-pack_cli_asset "@kilocode/cli-windows-x64-baseline" "zhanlu-cli-win32-x64-baseline-${RELEASE_VERSION}.zip" "zl.exe"
-pack_cli_asset "@kilocode/cli-linux-x64-baseline" "zhanlu-cli-linux-x64-baseline-${RELEASE_VERSION}.zip" "zl"
-pack_cli_asset "@kilocode/cli-linux-x64-musl" "zhanlu-cli-linux-x64-musl-${RELEASE_VERSION}.zip" "zl"
-pack_cli_asset "@kilocode/cli-linux-x64-baseline-musl" "zhanlu-cli-linux-x64-baseline-musl-${RELEASE_VERSION}.zip" "zl"
-pack_cli_asset "@kilocode/cli-linux-arm64-musl" "zhanlu-cli-linux-arm64-musl-${RELEASE_VERSION}.zip" "zl"
+pack_cli_asset "@zhanlucode/zl-windows-x64-baseline" "zhanlu-cli-win32-x64-baseline-${RELEASE_VERSION}.zip" "zl.exe"
+pack_cli_asset "@zhanlucode/zl-linux-x64-baseline" "zhanlu-cli-linux-x64-baseline-${RELEASE_VERSION}.zip" "zl"
+pack_cli_asset "@zhanlucode/zl-linux-x64-musl" "zhanlu-cli-linux-x64-musl-${RELEASE_VERSION}.zip" "zl"
+pack_cli_asset "@zhanlucode/zl-linux-x64-baseline-musl" "zhanlu-cli-linux-x64-baseline-musl-${RELEASE_VERSION}.zip" "zl"
+pack_cli_asset "@zhanlucode/zl-linux-arm64-musl" "zhanlu-cli-linux-arm64-musl-${RELEASE_VERSION}.zip" "zl"
 
 ./prepare_checksums.sh
+cleanup_delivery_profile # zhanlu_change

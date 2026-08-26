@@ -25,7 +25,6 @@ COMPONENT_REPOS = (
     "zhanlu-code",
     "zhanlu-core",
     "zhanlu-loc",
-    "zhanlu-vs",
 )
 WORKFLOWS = {
     "macos": "stable-macos.yml",
@@ -35,6 +34,7 @@ WORKFLOWS = {
 VERSION_RE = re.compile(r"^(?:v)?([0-9]+)\.([0-9]+)\.([0-9]+)$")
 TIME_PATCH_RE = re.compile(r"^[0-9]{1,4}$")
 TERMINAL_STATUS = "completed"
+DEFAULT_ZHANLU_CORE_REF = "3d7802ec82d0e7fd774cb1d3f4cb65ac24819909"
 
 
 class BuildError(RuntimeError):
@@ -50,7 +50,6 @@ class Config:
     source_branch: str
     delivery_profile: str
     zhanlu_core_ref: str
-    zhanlu_vs_ref: str
     bundle_codex_runtime: str
     platform: str
     apply: bool
@@ -68,7 +67,6 @@ class Config:
     confirmed_source_plan: Path | None = None
     source_commit: str | None = None
     zhanlu_core_commit: str | None = None
-    zhanlu_vs_commit: str | None = None
     workflow_ref: str = "master"  # zhanlu_change - portal worker passes --workflow-ref
 
 
@@ -93,7 +91,6 @@ class ReleasePlan:
             for ref in (
                 self.config.source_branch,
                 self.config.zhanlu_core_ref,
-                self.config.zhanlu_vs_ref,
             )
         )
 
@@ -167,8 +164,7 @@ def parser() -> argparse.ArgumentParser:
         help="vscodium branch that owns the workflow definition (default: master)",
     )  # zhanlu_change
     result.add_argument("--delivery-profile", default="default")
-    result.add_argument("--zhanlu-core-ref", default="develop")
-    result.add_argument("--zhanlu-vs-ref", default="develop")
+    result.add_argument("--zhanlu-core-ref", default=DEFAULT_ZHANLU_CORE_REF)
     result.add_argument(
         "--bundle-codex-runtime", choices=("0", "1"), default="0",
         help="Bundle the optional Codex CLI runtime (default: 0)",
@@ -196,17 +192,16 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--selected-source-sync",
         action="store_true",
-        help="Synchronize only the three explicitly selected component refs",
+        help="Synchronize only the two explicitly selected component refs",
     )
     result.add_argument(
         "--portal-source-sync",
         action="store_true",
-        help="Apply a confirmed five-develop plus selected-ref portal plan",
+        help="Apply a confirmed four-develop plus selected-ref portal plan",
     )
     result.add_argument("--confirmed-source-plan", type=Path, help=argparse.SUPPRESS)
     result.add_argument("--source-commit", help=argparse.SUPPRESS)
     result.add_argument("--zhanlu-core-commit", help=argparse.SUPPRESS)
-    result.add_argument("--zhanlu-vs-commit", help=argparse.SUPPRESS)
     return result
 
 
@@ -223,7 +218,6 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
     for name, value in (
         ("--source-commit", args.source_commit),
         ("--zhanlu-core-commit", args.zhanlu_core_commit),
-        ("--zhanlu-vs-commit", args.zhanlu_vs_commit),
     ):
         if value is not None and not re.fullmatch(r"[0-9a-f]{40}", value):
             raise BuildError(f"{name} must be an exact lowercase 40-character Git SHA")
@@ -235,7 +229,6 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         source_branch=args.source_branch,
         delivery_profile=args.delivery_profile,
         zhanlu_core_ref=args.zhanlu_core_ref,
-        zhanlu_vs_ref=args.zhanlu_vs_ref,
         bundle_codex_runtime=args.bundle_codex_runtime,
         platform=args.platform,
         apply=args.apply,
@@ -253,7 +246,6 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         confirmed_source_plan=args.confirmed_source_plan.resolve() if args.confirmed_source_plan else None,
         source_commit=args.source_commit,
         zhanlu_core_commit=args.zhanlu_core_commit,
-        zhanlu_vs_commit=args.zhanlu_vs_commit,
         workflow_ref=args.workflow_ref,  # zhanlu_change
     )
 
@@ -359,7 +351,6 @@ def validate_native_scripts(plan: ReleasePlan) -> None:
             raise BuildError(f"create-release.sh lacks required capability: {token}")
     for token in (
         "--delivery-profile)",
-        "--zhanlu-vs-ref)",
         "--bundle-codex-runtime)",
         "--version-time-patch)",
     ):
@@ -400,7 +391,6 @@ def selected_source_sync_command(
                 "--dry-run",
                 "--ref", f"zhanlu-code={plan.config.source_branch}",
                 "--ref", f"zhanlu-core={plan.config.zhanlu_core_ref}",
-                "--ref", f"zhanlu-vs={plan.config.zhanlu_vs_ref}",
                 "--output-plan", str(plan_file),
             ]
         )
@@ -433,11 +423,6 @@ def trigger_command(
         if resolved_sources and "zhanlu-core" in resolved_sources
         else plan.config.zhanlu_core_commit or plan.config.zhanlu_core_ref
     )
-    vs_ref = (
-        resolved_sources["zhanlu-vs"].source_commit_sha
-        if resolved_sources and "zhanlu-vs" in resolved_sources
-        else plan.config.zhanlu_vs_commit or plan.config.zhanlu_vs_ref
-    )
     command = [
         "bash",
         "./scripts/trigger-stable-release.sh",
@@ -448,8 +433,6 @@ def trigger_command(
         plan.config.delivery_profile,
         "--zhanlu-core-ref",
         core_ref,
-        "--zhanlu-vs-ref",
-        vs_ref,
         "--bundle-codex-runtime",
         plan.config.bundle_codex_runtime,
         "--platform",
@@ -520,7 +503,6 @@ def plan_document(
         "sourceBranch": plan.config.source_branch,
         "deliveryProfile": plan.config.delivery_profile,
         "zhanluCoreRef": plan.config.zhanlu_core_ref,
-        "zhanluVsRef": plan.config.zhanlu_vs_ref,
         "bundleCodexRuntime": plan.config.bundle_codex_runtime == "1",
         "platform": plan.config.platform,
         "generateOnly": plan.config.generate_only,
@@ -689,7 +671,6 @@ def print_plan(
     print(f"  internal time patch: {plan.version_time_patch}", file=output)
     print(f"  source branch: {plan.config.source_branch}", file=output)
     print(f"  zhanlu-core ref: {plan.config.zhanlu_core_ref}", file=output)
-    print(f"  zhanlu-vs ref: {plan.config.zhanlu_vs_ref}", file=output)
     print(f"  bundle Codex runtime: {plan.config.bundle_codex_runtime}", file=output)
     print(f"  delivery profile: {plan.config.delivery_profile}", file=output)
     print(f"  platform: {plan.config.platform}", file=output)
@@ -896,11 +877,11 @@ def synchronize_sources(
                 capture=False,
             )
             resolved = parse_selected_ref_plan(plan_file)
-            expected = {"zhanlu-code", "zhanlu-core", "zhanlu-vs"}
+            expected = {"zhanlu-code", "zhanlu-core"}
             if set(resolved) != expected:
                 raise BuildError(
                     "selected-ref synchronization did not resolve exactly "
-                    "zhanlu-code, zhanlu-core, and zhanlu-vs"
+                    "zhanlu-code and zhanlu-core"
                 )
             print("Synchronizing selected GitLab refs to GitHub...", file=output)
             runner.run(
@@ -1007,12 +988,11 @@ def portal_source_plan(
     }
     if set(develop_rows) != expected_repositories:
         raise BuildError(
-            "portal source plan must contain develop for all five components"
+            "portal source plan must contain develop for all four components"
         )
     selected_requests = {
         "zhanlu-code": plan.config.source_branch,
         "zhanlu-core": plan.config.zhanlu_core_ref,
-        "zhanlu-vs": plan.config.zhanlu_vs_ref,
     }
     selected: dict[str, ResolvedSourceRef] = {}
     for repository, requested in selected_requests.items():
@@ -1028,7 +1008,7 @@ def portal_source_plan(
     destinations = [(item.repository, item.destination_ref) for item in rows]
     if len(set(destinations)) != len(destinations):
         raise BuildError("portal source plan contains duplicate destination refs")
-    expected_count = 5 + sum(
+    expected_count = 4 + sum(
         requested not in ("develop", "refs/heads/develop")
         for requested in selected_requests.values()
     )

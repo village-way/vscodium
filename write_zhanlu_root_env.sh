@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Write zhanlu-code repo-root .env (this directory) before get_zhanlu.sh.
 # prepare_zhanlu.sh copies it into vscode/extensions/zhanlu/.env for the builtin app bundle;
-# it is not part of the VSIX (see packages/kilo-vscode/.vscodeignore in zhanlu-vs).
+# it is not part of the packaged native Agent resources.
 # CI: set GitHub Actions secret ZHANLU_ROOT_DOTENV to the full .env file contents.
 # Local (optional): export ZHANLU_ROOT_DOTENV="$(cat .env)" or set individual vars below.
 # zhanlu_change - document merge path for builtin .env

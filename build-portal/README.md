@@ -10,7 +10,7 @@
 - 六个裸 Git 缓存存放于 `git-cache`；请求只创建位于 `emptyDir` 的临时 worktree。
 - 每日 02:30（Asia/Shanghai）在线备份 SQLite 到 `backups`，每份备份在原子改名前执行 `integrity_check`，保留 14 天。
 
-每次预览固定包含五个组件的 `develop`。如果 zhanlu-code、zhanlu-core 或 zhanlu-vs 选择了其他 Ref，则在同一不可变计划中追加该 Ref。确认后应用计划时重新验证 GitLab SHA 和 GitHub lease，且只使用精确 `--force-with-lease`；不会调用 all-refs。
+每次预览固定包含四个组件的 `develop`。如果 zhanlu-code 或 zhanlu-core 选择了其他 Ref，则在同一不可变计划中追加该 Ref。确认后应用计划时重新验证 GitLab SHA 和 GitHub lease，且只使用精确 `--force-with-lease`；不会调用 all-refs。
 
 ## 本地验证
 

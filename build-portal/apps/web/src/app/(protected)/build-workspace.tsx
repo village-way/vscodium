@@ -3,10 +3,10 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiJson, writeHeaders, ApiError } from "../lib/api-client";
-import { normalizeBuildForm } from "../lib/build-form";
+import { defaultZhanluCoreRef, normalizeBuildForm } from "../lib/build-form";
 import { useAuth } from "./auth-context";
 
-type Repository = "zhanlu-code" | "zhanlu-core" | "zhanlu-vs";
+type Repository = "zhanlu-code" | "zhanlu-core";
 type Build = { id: string; spec: { version: string; platform: string; kind: string }; resolved?: { releaseVersion?: string }; phase: string; created_at: string };
 const statusLabels: Record<string, string> = { awaiting_confirmation: "待确认", queued: "排队中", source_sync: "同步源码", preflight: "发布预检", dispatching: "触发工作流", succeeded: "已派发", failed: "失败", preview_queued: "等待预览", previewing: "生成预览" };
 const formatDate = (value?: string) => value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(new Date(value)) : "—";
@@ -24,8 +24,7 @@ export function BuildWorkspace() {
   const [version, setVersion] = useState("");
   const [zhanluCodeRef, setZhanluCodeRef] = useState("develop");
   const [deliveryProfile, setDeliveryProfile] = useState("default");
-  const [zhanluCoreRef, setZhanluCoreRef] = useState("develop");
-  const [zhanluVsRef, setZhanluVsRef] = useState("develop");
+  const [zhanluCoreRef, setZhanluCoreRef] = useState(defaultZhanluCoreRef);
   const [bundleCodexRuntime, setBundleCodexRuntime] = useState(false);
   const [syncGitLab, setSyncGitLab] = useState(false);
   const [publish, setPublish] = useState(false);
@@ -52,14 +51,14 @@ export function BuildWorkspace() {
       const response = await apiJson<{ build: { id: string } }>("/api/build-previews", {
         method: "POST",
         headers: writeHeaders(csrfToken),
-        body: JSON.stringify(normalizeBuildForm({ kind, version, platform, outputMode, zhanluCodeRef, deliveryProfile, zhanluCoreRef, zhanluVsRef, bundleCodexRuntime, syncGitLab, publish })),
+        body: JSON.stringify(normalizeBuildForm({ kind, version, platform, outputMode, zhanluCodeRef, deliveryProfile, zhanluCoreRef, bundleCodexRuntime, syncGitLab, publish })),
       });
       router.push(`/builds/${response.build.id}`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "预览创建失败"); setPending(false); }
   }
 
   return <div className="workspace">
-    <section className="page-heading"><div><h1>创建构建</h1><p className="muted">先生成五仓同步预览，确认后触发 GitHub Actions。</p></div></section>
+    <section className="page-heading"><div><h1>创建构建</h1><p className="muted">先生成四仓同步预览，确认后触发 GitHub Actions。</p></div></section>
     <section className="panel form-panel">
       <div className="panel-heading"><h2>构建参数</h2><span className="workflow-chip">vscodium@master</span></div>
       <form onSubmit={preview}>
@@ -70,8 +69,8 @@ export function BuildWorkspace() {
           <label>产物<select value={outputMode} onChange={(event) => setOutputMode(event.target.value)} disabled={kind === "formal"}><option value="workflow-artifact">工作流制品</option><option value="release">Release</option></select></label>
           <label>交付配置<input value={deliveryProfile} onChange={(event) => setDeliveryProfile(event.target.value)} required /></label>
           <div className="source-section">
-            <div className="source-section-heading"><strong>构建源码</strong><span>五个组件的 develop 始终同步；以下三个仓库可追加自定义 Ref。</span></div>
-            <div className="source-fields"><RefField repository="zhanlu-code" value={zhanluCodeRef} onChange={setZhanluCodeRef} /><RefField repository="zhanlu-core" value={zhanluCoreRef} onChange={setZhanluCoreRef} /><RefField repository="zhanlu-vs" value={zhanluVsRef} onChange={setZhanluVsRef} /></div>
+            <div className="source-section-heading"><strong>构建源码</strong><span>四个组件的 develop 始终同步；以下两个仓库可追加自定义 Ref。</span></div>
+            <div className="source-fields"><RefField repository="zhanlu-code" value={zhanluCodeRef} onChange={setZhanluCodeRef} /><RefField repository="zhanlu-core" value={zhanluCoreRef} onChange={setZhanluCoreRef} /></div>
           </div>
         </div>
         <div className="check-grid">

@@ -12,6 +12,9 @@ on:
       checkout_pr:
         type: string
         description: Checkout PR
+      zhanlu_core_ref:
+        type: string
+        description: Branch or commit of zhanlu-core to fetch (optional)
   repository_dispatch:
     types: [insider]
   push:
@@ -36,6 +39,7 @@ env:
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: insider
   ZHANLU_CODE_SOURCE_BRANCH: develop # zhanlu_change - wrapper workflow fetches zhanlu-code before source-owned scripts
+  ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }} # zhanlu_change
 
 jobs:
   check:
@@ -161,21 +165,16 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for Zhanlu Agent
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build zhanlu-vs
+      - name: Build Zhanlu Agent from zhanlu-core
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Get Open Remote SSH / WSL builtin extensions
@@ -222,7 +221,7 @@ jobs:
       - compile
     strategy:
       fail-fast: false
-      # zhanlu_change start - ARM64 job uses windows-11-arm so get_zhanlu.sh compiles @kilocode/cli-windows-arm64 natively (x64 runner cross-compile fails on Bun toolchain extract)
+      # zhanlu_change start - ARM64 job uses windows-11-arm so the Agent resource builder compiles @zhanlucode/zl-windows-arm64 natively (x64 runner cross-compile fails on Bun toolchain extract)
       matrix:
         include:
           - vscode_arch: x64
@@ -301,21 +300,20 @@ jobs:
           name: vscode
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for zhanlu-vs
+      - name: Restore Agent source from zhanlu-core artifact
+        run: ./scripts/restore-zhanlu-agent-source.sh
+        if: env.SHOULD_BUILD == 'yes'
+
+      - name: Write root .env for Zhanlu Agent
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build zhanlu-vs
+      - name: Build Zhanlu Agent from zhanlu-core
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Build

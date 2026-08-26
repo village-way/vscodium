@@ -169,6 +169,7 @@ done
 # 需要复制的文件列表
 FILES_TO_COPY=(
     "build.sh"
+    "build_zhanlu_agent_resources.sh" # zhanlu_change - native Agent build entry is source-owned
     "build_cli.sh"
     "check_cron_or_pr.sh"
     "check_tags.sh"

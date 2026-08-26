@@ -202,7 +202,7 @@ AFTER_DRY_RUN="$(git --git-dir="$GITHUB_BARE" show-ref | LC_ALL=C sort)"
 [[ "$BEFORE_DRY_RUN" == "$AFTER_DRY_RUN" ]] || fail "dry-run changed GitHub refs"
 [[ -f "${CACHE_ROOT}/fixture.git/.cache-reuse-sentinel" ]] || fail "persistent cache was recreated instead of reused"
 
-# Portal builds synchronize only the three explicitly selected refs. Diverged
+# Portal builds synchronize only explicitly selected refs. Diverged
 # branches and tags are overwritten with an exact force-with-lease; a raw SHA
 # receives a content-addressed GitHub branch so Actions can fetch it.
 SELECTED_CONFIG="${TEST_ROOT}/selected-repos.tsv"
@@ -222,7 +222,7 @@ ZHANLU_SYNC_RETRIES=1 \
 	--output-plan "$SELECTED_PLAN" >"${TEST_ROOT}/selected-dry-run.log" 2>&1
 SELECTED_AFTER_DRY="$(git --git-dir="$GITHUB_BARE" show-ref | LC_ALL=C sort)"
 [[ "$SELECTED_BEFORE" == "$SELECTED_AFTER_DRY" ]] || fail "selected-ref dry-run changed GitHub refs"
-[[ "$(wc -l <"$SELECTED_PLAN" | tr -d ' ')" -eq 3 ]] || fail "selected-ref plan did not contain three refs"
+[[ "$(wc -l <"$SELECTED_PLAN" | tr -d ' ')" -eq 3 ]] || fail "selected-ref fixture plan did not contain its three refs"
 grep -q 'Ref scope: selected refs only' "${TEST_ROOT}/selected-dry-run.log" || fail "selected-ref scope was not reported"
 if grep -q -- '--all-refs' "${TEST_ROOT}/selected-dry-run.log" "$SELECTED_PLAN"; then
 	fail "selected-ref synchronization used --all-refs"

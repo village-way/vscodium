@@ -12,6 +12,16 @@ on:
       checkout_pr:
         type: string
         description: Checkout PR
+      zhanlu_core_ref:
+        type: string
+        description: Branch or commit of zhanlu-core to fetch (optional)
+      # zhanlu_change start - optionally test the same Codex bundle path in Insider builds
+      bundle_codex_runtime:
+        type: choice
+        description: Bundle the optional Codex CLI runtime
+        default: '0'
+        options: ['0', '1']
+      # zhanlu_change end
   repository_dispatch:
     types: [insider]
   push:
@@ -38,6 +48,10 @@ env:
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: insider
   ZHANLU_CODE_SOURCE_BRANCH: develop # zhanlu_change - wrapper workflow fetches zhanlu-code before source-owned scripts
+  ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }} # zhanlu_change
+  # zhanlu_change start - keep optional runtime inputs consistent across Insider jobs
+  ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bundle_codex_runtime || github.event.client_payload.bundle_codex_runtime || '0' }}
+  # zhanlu_change end
 
 jobs:
   check:
@@ -47,7 +61,9 @@ jobs:
       MS_TAG: ${{ env.MS_TAG }}
       RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
       SHOULD_BUILD: ${{ env.SHOULD_BUILD }}
+      SHOULD_BUILD_SNAP: ${{ env.SHOULD_BUILD_SNAP }} # zhanlu_change - expose the snap gate to the downstream job
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
+      ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ env.ZHANLU_BUNDLE_CODEX_RUNTIME }} # zhanlu_change - gate native Bridge preparation
 
     steps:
       - uses: actions/checkout@v6
@@ -80,9 +96,60 @@ jobs:
           CHECK_ALL: 'yes'
         run: ./check_tags.sh
 
+  # zhanlu_change start - build each Linux Bridge on a native runner before cross-arch packaging
+  prepare_responses_bridge:
+    needs:
+      - check
+    if: (needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true') && needs.check.outputs.ZHANLU_BUNDLE_CODEX_RUNTIME == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x64
+            runtime_target: linux-x64
+            runner: ubuntu-24.04
+          - target: arm64
+            runtime_target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout zhanlu-code source
+        uses: actions/checkout@v6
+        with:
+          repository: village-way/zhanlu-code
+          ref: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
+          token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          path: zhanlu-code-source
+
+      - name: Checkout zhanlu-core Agent source
+        uses: actions/checkout@v6
+        with:
+          repository: village-way/zhanlu-core
+          ref: ${{ env.ZHANLU_CORE_REF || 'develop' }}
+          token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          path: zhanlu-core-bridge
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install native Bridge build dependencies
+        run: sudo apt-get update -y && sudo apt-get install -y binutils file jq musl-tools
+
+      - name: Build and verify Responses Bridge
+        run: bash zhanlu-code-source/build/linux/prepare_zhanlu_responses_bridge.sh "${{ matrix.target }}" "${{ github.workspace }}/zhanlu-core-bridge/zhanlu-agent" "${{ runner.temp }}/zhanlu-responses-bridge"
+
+      - name: Upload Responses Bridge
+        uses: actions/upload-artifact@v7
+        with:
+          name: zhanlu-responses-bridge-${{ matrix.runtime_target }}
+          path: ${{ runner.temp }}/zhanlu-responses-bridge/${{ matrix.runtime_target }}/
+          retention-days: 1
+  # zhanlu_change end
+
   compile:
     needs:
       - check
+      - prepare_responses_bridge
+    if: always() && needs.check.result == 'success' && (needs.prepare_responses_bridge.result == 'success' || needs.prepare_responses_bridge.result == 'skipped') # zhanlu_change - optional Bridge job may be skipped
     runs-on: ubuntu-22.04
     env:
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
@@ -148,21 +215,17 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for Zhanlu Agent
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build zhanlu-vs
+      - name: Build Zhanlu Agent from zhanlu-core
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-        run: ./get_zhanlu.sh
+          ZHANLU_RESPONSES_BRIDGE_BIN_ROOT: ${{ runner.temp }}/zhanlu-responses-bridge # zhanlu_change
+        run: ./build_zhanlu_agent_resources.sh
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Get Open Remote SSH / WSL builtin extensions
@@ -215,32 +278,40 @@ jobs:
         - slug: X64
           vscode_arch: x64
           npm_arch: x64
+          runtime_target: linux-x64 # zhanlu_change
           image: vscodium/vscodium-linux-build-agent:focal-x64
         - slug: ARM64
           vscode_arch: arm64
           npm_arch: arm64
+          runtime_target: linux-arm64 # zhanlu_change
           image: vscodium/vscodium-linux-build-agent:focal-arm64
         - slug: ARM32
           vscode_arch: armhf
           npm_arch: arm
+          runtime_target: '' # zhanlu_change - Codex does not publish Linux ARM32 resources
           image: vscodium/vscodium-linux-build-agent:focal-armhf
         - slug: RISCV64
           vscode_arch: riscv64
           npm_arch: riscv64
+          runtime_target: '' # zhanlu_change
           image: vscodium/vscodium-linux-build-agent:focal-riscv64
         - slug: LOONG64
           vscode_arch: loong64
           npm_arch: loong64
+          runtime_target: '' # zhanlu_change
           image: vscodium/vscodium-linux-build-agent:crimson-loong64
         - slug: PPC64
           vscode_arch: ppc64le
           npm_arch: ppc64
+          runtime_target: '' # zhanlu_change
           image: vscodium/vscodium-linux-build-agent:focal-ppc64le
     container:
       image: ${{ matrix.image }}
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
-      DISABLED: ${{ vars[format('DISABLE_INSIDER_LINUX_APP_{0}', matrix.slug)] }}
+      # ARM32/PPC64: the native Agent requires zl, which has no matching binary.
+      # RISCV64/LOONG64: arch patches don't apply to zhanlu-core; gulp tasks missing.
+      DISABLED: ${{ (matrix.slug == 'ARM32' || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64') && 'yes' || vars[format('DISABLE_INSIDER_LINUX_APP_{0}', matrix.slug)] }}
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
@@ -288,34 +359,42 @@ jobs:
         run: ./check_tags.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Install dependencies
-        run: ./build/linux/deps.sh
-        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
-
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
-
-      - name: Download vscode artifact
-        uses: actions/download-artifact@v6
+      - name: Download zhanlu-core artifact for Agent build
+        uses: actions/download-artifact@v8
         with:
           name: vscode
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for zhanlu-vs
+      - name: Restore Agent source from zhanlu-core artifact
+        run: ./scripts/restore-zhanlu-agent-source.sh
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
+      - name: Download Responses Bridge
+        uses: actions/download-artifact@v8
+        with:
+          name: zhanlu-responses-bridge-${{ matrix.runtime_target }}
+          path: ${{ runner.temp }}/zhanlu-responses-bridge/${{ matrix.runtime_target }}
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && matrix.runtime_target != ''
+
+      - name: Write root .env for target Zhanlu Agent build
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build zhanlu-vs
+      - name: Build target Zhanlu Agent from zhanlu-core
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-        run: ./get_zhanlu.sh
+          ZHANLU_RESPONSES_BRIDGE_BIN_ROOT: ${{ runner.temp }}/zhanlu-responses-bridge
+        run: ./build_zhanlu_agent_resources.sh
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+      # zhanlu_change end
+
+      - name: Install dependencies
+        run: ./build/linux/deps.sh
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - name: Build
@@ -459,27 +538,30 @@ jobs:
           bun-version: '1.3.14'
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Write root .env for zhanlu-vs
+      - name: Download zhanlu-core artifact for Agent CLI build
+        uses: actions/download-artifact@v8
+        with:
+          name: vscode
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+
+      - name: Restore Agent source from zhanlu-core artifact
+        run: ./scripts/restore-zhanlu-agent-source.sh
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+
+      - name: Write root .env for Zhanlu Agent
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Get and build zhanlu-vs CLI for target arch
+      - name: Build Zhanlu Agent CLI for target arch
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
-          ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_CLI_ONLY: 'yes'
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
       # zhanlu_change end
 
-      - name: Download vscode artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: vscode
-        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
       - name: Build
         env:
@@ -579,27 +661,30 @@ jobs:
           bun-version: '1.3.14'
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Write root .env for zhanlu-vs
+      - name: Download zhanlu-core artifact for Agent CLI build
+        uses: actions/download-artifact@v8
+        with:
+          name: vscode
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+
+      - name: Restore Agent source from zhanlu-core artifact
+        run: ./scripts/restore-zhanlu-agent-source.sh
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+
+      - name: Write root .env for Zhanlu Agent
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Get and build zhanlu-vs CLI for target arch
+      - name: Build Zhanlu Agent CLI for target arch
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
-          ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_CLI_ONLY: 'yes'
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
       # zhanlu_change end
 
-      - name: Download vscode artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: vscode
-        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
       - name: Build
         env:

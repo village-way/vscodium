@@ -55,6 +55,21 @@ jobs:
       - name: Clone VSCode repo
         run: . get_repo.sh
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Write root .env for Zhanlu Agent
+        env:
+          ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
+        run: ./write_zhanlu_root_env.sh
+
+      - name: Build Zhanlu Agent from zhanlu-core
+        env:
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+        run: ./build_zhanlu_agent_resources.sh
+
       - name: Check existing VSCodium tags/releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

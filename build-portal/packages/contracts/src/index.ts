@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export const platforms = ["macos", "linux", "windows", "all"] as const;
+export const defaultZhanluCoreRef = "3d7802ec82d0e7fd774cb1d3f4cb65ac24819909";
 export const buildPhases = [
   "preview_queued", "previewing", "awaiting_confirmation", "queued",
   "source_sync", "preflight", "dispatching", "succeeded", "failed",
@@ -41,8 +42,7 @@ const rawBuildSpecSchema = z.object({
   // Kept as sourceBranch for workflow/API compatibility; this is the zhanlu-code ref.
   sourceBranch: buildRefSchema.default("develop"),
   deliveryProfile: z.string().min(1).max(100).default("default"),
-  zhanluCoreRef: buildRefSchema.default("develop"),
-  zhanluVsRef: buildRefSchema.default("develop"),
+  zhanluCoreRef: buildRefSchema.default(defaultZhanluCoreRef),
   bundleCodexRuntime: z.boolean().default(false),
   outputMode: z.enum(["release", "workflow-artifact"]).default("release"),
   triggerOnly: z.boolean().default(false),

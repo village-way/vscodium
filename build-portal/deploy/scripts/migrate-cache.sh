@@ -26,7 +26,7 @@ spec:
           args:
             - |
               install -d -o 10001 -g 10001 -m 0750 /new
-              for repository in zhanlu-cloud zhanlu-code zhanlu-core zhanlu-loc zhanlu-vs; do
+              for repository in zhanlu-cloud zhanlu-code zhanlu-core zhanlu-loc; do
                 source="/legacy/git-sync/cache/\${repository}.git"
                 target="/new/\${repository}.git"
                 test -d "\$source"

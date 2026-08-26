@@ -17,8 +17,8 @@ const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/var/lib/zhanlu-build/work
 const GIT_CACHE_ROOT = process.env.GIT_CACHE_ROOT ?? "/var/lib/zhanlu-build/git-cache";
 const POLL_MS = Number(process.env.WORKER_POLL_MS ?? 3000);
 const LEASE_MS = 10 * 60_000;
-const componentRepositories = ["zhanlu-cloud", "zhanlu-code", "zhanlu-core", "zhanlu-loc", "zhanlu-vs"] as const;
-const buildRepositories = ["zhanlu-code", "zhanlu-core", "zhanlu-vs"] as const;
+const componentRepositories = ["zhanlu-cloud", "zhanlu-code", "zhanlu-core", "zhanlu-loc"] as const;
+const buildRepositories = ["zhanlu-code", "zhanlu-core"] as const;
 const workflowByPlatform = { macos: "stable-macos.yml", linux: "stable-linux.yml", windows: "stable-windows.yml" } as const;
 
 type RepositoryUrls = string | { github?: string; gitlab?: string };
@@ -104,7 +104,6 @@ export function portalSyncArguments(spec: BuildSpec, planFile: string): string[]
   const selected: Array<[string, string]> = [
     ["zhanlu-code", spec.sourceBranch],
     ["zhanlu-core", spec.zhanluCoreRef],
-    ["zhanlu-vs", spec.zhanluVsRef],
   ];
   for (const [repository, ref] of selected) if (!isDevelop(ref)) args.push("--ref", `${repository}=${ref}`);
   args.push("--output-plan", planFile);
@@ -122,8 +121,8 @@ export function parseSourcePlan(contents: string, spec: BuildSpec): { mirrorPlan
     return { repository, refType, requestedRef, sourceRef, destinationRef, gitlabSha, gitlabObjectSha, previousGithubSha: previous === "-" ? "" : previous, action };
   });
   const develop = new Set(mirrorPlan.filter((item) => item.destinationRef === "refs/heads/develop").map((item) => item.repository));
-  if (develop.size !== 5 || componentRepositories.some((repository) => !develop.has(repository))) throw new Error("source plan does not contain all five develop refs");
-  const requested: Record<string, string> = { "zhanlu-code": spec.sourceBranch, "zhanlu-core": spec.zhanluCoreRef, "zhanlu-vs": spec.zhanluVsRef };
+  if (develop.size !== 4 || componentRepositories.some((repository) => !develop.has(repository))) throw new Error("source plan does not contain all four develop refs");
+  const requested: Record<string, string> = { "zhanlu-code": spec.sourceBranch, "zhanlu-core": spec.zhanluCoreRef };
   const sourceRefs: SourceRefs = {};
   for (const repository of buildRepositories) {
     const matches = mirrorPlan.filter((item) => item.repository === repository && (item.requestedRef === requested[repository] || (isDevelop(requested[repository]!) && item.destinationRef === "refs/heads/develop")));

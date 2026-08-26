@@ -20,11 +20,6 @@ on:
           - '0'
         default: '1'
       # zhanlu_change end
-      # zhanlu_change start - allow spearhead-triggered releases to pin bundled zhanlu-vs source
-      zhanlu_vs_ref:
-        type: string
-        description: Branch, tag, commit, or ref of zhanlu-vs to fetch (optional)
-      # zhanlu_change end
   schedule:
     # Runs at 02:00 Beijing time (18:00 UTC).
     - cron: '0 18 * * *'
@@ -43,7 +38,6 @@ jobs:
       KILO_VERSION: 1.0.0
       ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
       VSCODE_QUALITY: stable
-      ZHANLU_VS_REF: ${{ github.event.inputs.zhanlu_vs_ref || '' }} # zhanlu_change
       SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'develop' }} # zhanlu_change
       ZHANLU_DELIVERY_PROFILE: ${{ github.event.inputs.delivery_profile || 'default' }} # zhanlu_change
       ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ github.event.inputs.bundle_codex_runtime || '1' }} # zhanlu_change - scheduled and manual spearhead builds bundle Codex runtime by default
@@ -85,21 +79,12 @@ jobs:
 
       - name: Trigger stable platform workflows
         run: |
-          # zhanlu_change start - keep spearhead-triggered platform builds on the requested zhanlu-vs ref
-          zhanlu_vs_args=()
-          if [[ -n "${ZHANLU_VS_REF}" ]]; then
-            zhanlu_vs_args+=(--zhanlu-vs-ref "${ZHANLU_VS_REF}")
-          fi
-          # zhanlu_change end
           bash ./scripts/trigger-stable-release.sh \
             --workflow \
             --source-branch "${SOURCE_BRANCH}" \
             --delivery-profile "${ZHANLU_DELIVERY_PROFILE}" \
-            --zhanlu-core-ref develop \
             --bundle-codex-runtime "${ZHANLU_BUNDLE_CODEX_RUNTIME}" \
-            "${zhanlu_vs_args[@]}" \
             --platform all \
             --release-version "${RELEASE_VERSION}"
         env:
           RELEASE_VERSION: ${{ steps.create-release.outputs.release_version }}
-          ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
