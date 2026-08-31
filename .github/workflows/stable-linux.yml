@@ -474,6 +474,14 @@ jobs:
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
 
+      # zhanlu_change start - target packaging regenerates MXC manifests with Bun
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+      # zhanlu_change end
+
       # zhanlu_change start - consume the native target Bridge before building the target VSIX
       - name: Download Responses Bridge
         uses: actions/download-artifact@v8
