@@ -10,10 +10,12 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
 
 ## Defaults
 
-- Store this skill in the current `/Volumes/Files/vscodium` project, but run
-  releases from the canonical `/Volumes/Files/zhanlu-ide/vscodium` checkout.
-  Do not run release commands from the older standalone checkout that contains
-  this skill.
+- Maintain this Skill with its wrapper under this repository's `.agents/skills`.
+  Resolve the intended multi-repository workspace explicitly with `--workspace`
+  (or `ZHANLU_WORKSPACE_ROOT`); the wrapper currently falls back to
+  `/Volumes/Files/zhanlu-ide`. The release checkout is `<workspace>/vscodium`.
+  Preview that resolved path before apply; a linked development worktree is not
+  automatically the intended release checkout.
 - Use `develop` for zhanlu-code, zhanlu-core, and zhanlu-vs.
 - Use delivery Profile `default`, workflow dispatch, and platform `all`.
 - Do not bundle the optional Codex CLI runtime by default; its build input is `0`.
@@ -31,6 +33,20 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
   them for development releases.
 - Wait for the selected workflow runs to finish unless the user asks to return
   immediately after dispatch.
+
+## Inspection versus execution
+
+For status, failure diagnosis or review of an existing release, inspect the supplied
+version/run/request and its recorded source plan without `--apply`. Do not require
+new release inputs, synchronization or plan approval merely to inspect state.
+Steps below apply when the user requested preparation or execution of a build.
+A missing input blocks only the dependent action; keep local investigation useful.
+
+The public workflows fetch the mirrored `zhanlu-code` source at a selected commit;
+its private source owner is GitLab `zhanlu-code`. Verify both workflow and packaging
+SHAs. `zhanlu-vs` remains in this wrapper's compatibility/mirror contract; native
+Agent code lives in `zhanlu-core/zhanlu-agent`. A one-file rename of the legacy
+input is not a complete source migration.
 
 ## Workflow
 
@@ -51,12 +67,15 @@ Use the bundled wrapper instead of assembling `create-release.sh` and
 3. Show the resolved release version, internal patch, refs, Profile, platform,
    visibility, source-mirror scope, GitLab-release-sync decision, repository
    state, component SHAs, and exact native commands. Never expose token values.
-4. Ask the user to confirm that exact plan. Explain that applying it may push a
+4. Present that exact plan for confirmation, reusing an explicit current-conversation
+   approval only if it already covers the same plan and side effects. A changed
+   source SHA, lease, visibility or target requires a fresh decision. Applying it may push
    component branches or tags from GitLab to GitHub, push a GitHub release
    tag/commit, create or edit a GitHub Release, create GitLab tags and releases
    for five components, and dispatch workflows.
-5. Only after explicit confirmation in the current conversation, repeat the
-   same command with `--apply`.
+5. Only after explicit confirmation in the current conversation covers that exact
+   plan, repeat the same command with `--apply`. A general coding/PR request is
+   not release authorization.
 6. During an interactive apply, run
    `sync-zhanlu-gitlab-to-github.sh --dry-run` first. For build-portal apply,
    the Worker must already have run `sync-zhanlu-selected-refs.sh --dry-run`
@@ -158,7 +177,8 @@ After editing this skill, run:
 
 ```bash
 python3 .agents/skills/zhanlu-build/scripts/test_zhanlu_build.py
-python3 /Users/peng/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  .agents/skills/zhanlu-build
 git diff --check -- .agents/skills/zhanlu-build
 ```
+
+If the host provides a Skill validator, also validate this entrypoint using its
+resolved tool path; do not depend on another developer's home directory.
