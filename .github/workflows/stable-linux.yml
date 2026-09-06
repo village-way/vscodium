@@ -442,7 +442,10 @@ jobs:
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - name: Restore Agent source from zhanlu-core artifact
-        run: ./scripts/restore-zhanlu-agent-source.sh
+        run: |
+          ./scripts/restore-zhanlu-agent-source.sh
+          # agent-web esbuild imports host modules from vscode/src; restore only unpacks zhanlu-agent.
+          tar -xzf vscode.tar.gz vscode/src
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.ZHANLU_VS_REF == ''
       # zhanlu_change end
 

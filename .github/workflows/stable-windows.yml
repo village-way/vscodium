@@ -382,7 +382,11 @@ jobs:
 
       # zhanlu_change start - restore the Agent source before the fetched Code scripts consume it
       - name: Restore Agent source from zhanlu-core artifact
-        run: ./scripts/restore-zhanlu-agent-source.sh
+        shell: bash
+        run: |
+          ./scripts/restore-zhanlu-agent-source.sh
+          # agent-web esbuild imports host modules from vscode/src; restore only unpacks zhanlu-agent.
+          tar -xzf vscode.tar.gz vscode/src
         if: env.SHOULD_BUILD == 'yes' && env.ZHANLU_VS_REF == ''
       # zhanlu_change end
 
