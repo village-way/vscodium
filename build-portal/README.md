@@ -41,7 +41,7 @@ deploy/scripts/migrate-cache.sh <image@sha256:digest>
 deploy/scripts/deploy.sh <image@sha256:digest> <deployment.env> <workspace.env> <tls.crt> <tls.key> <github-app.pem>
 ```
 
-`deploy.sh` 只读取所需键，不使用 PostgreSQL 配置或 CA 私钥。GitHub API 使用 App installation token，Git push 则强制使用具备 `repo` 和 `workflow` 权限的 `GITHUB_GIT_TOKEN`；缺失时 Worker 拒绝启动。bootstrap Secret 在管理员创建或确认已存在后立即删除。完成线上 `1.4.2` 三平台派发和 SQLite 备份验证后，运行：
+`deploy.sh` 只读取所需键，不使用 PostgreSQL 配置或 CA 私钥。GitHub API 使用 App installation token，Git push 则强制使用具备 `repo` 和 `workflow` 权限的 `GITHUB_GIT_TOKEN`；缺失时 Worker 拒绝启动。bootstrap Secret 在管理员创建或确认已存在后立即删除。历史 SQLite 迁移还提供以下一次性清理工具。它不是常规发布步骤：只有当前迁移已验收、备份已核验，且操作者明确批准本次精确资源删除后，才可运行：
 
 ```bash
 deploy/scripts/cleanup-legacy.sh <image@sha256:digest>
