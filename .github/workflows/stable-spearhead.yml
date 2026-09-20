@@ -16,9 +16,9 @@ on:
         type: choice
         description: Bundle the Codex CLI runtime
         options:
-          - '1'
           - '0'
-        default: '1'
+          - '1'
+        default: '0'
       # zhanlu_change end
       # zhanlu_change start - allow spearhead-triggered releases to pin bundled zhanlu-vs source
       zhanlu_vs_ref:
@@ -46,7 +46,7 @@ jobs:
       ZHANLU_VS_REF: ${{ github.event.inputs.zhanlu_vs_ref || '' }} # zhanlu_change
       SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'develop' }} # zhanlu_change
       ZHANLU_DELIVERY_PROFILE: ${{ github.event.inputs.delivery_profile || 'default' }} # zhanlu_change
-      ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ github.event.inputs.bundle_codex_runtime || '1' }} # zhanlu_change - scheduled and manual spearhead builds bundle Codex runtime by default
+      ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ github.event.inputs.bundle_codex_runtime || '0' }} # zhanlu_change - scheduled builds have no inputs; default off matches the portal until the Linux Bridge job targets zhanlu-core
 
     steps:
       - uses: actions/checkout@v6
