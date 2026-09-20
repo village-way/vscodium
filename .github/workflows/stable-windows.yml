@@ -106,7 +106,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -159,7 +159,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -216,15 +216,15 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for the legacy extension
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
-      - name: Get and build zhanlu-vs
+      - name: Get and build the legacy extension
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
           # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
@@ -234,9 +234,9 @@ jobs:
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
-      - name: Get and build zhanlu-loc (Chinese Language Pack)
+      - name: Get and build the language pack
         env:
-          ZHANLU_LOC_REPO_URL: https://github.com/village-way/zhanlu-loc.git
+          ZHANLU_LOC_REPO_URL: ${{ vars.LOC_REPO_URL }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_zhanlu_loc.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
@@ -318,7 +318,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -381,7 +381,7 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       # zhanlu_change start - restore the Agent source before the fetched Code scripts consume it
-      - name: Restore Agent source from zhanlu-core artifact
+      - name: Restore Agent source from the core artifact
         shell: bash
         run: |
           ./scripts/restore-zhanlu-agent-source.sh
@@ -390,15 +390,15 @@ jobs:
         if: env.SHOULD_BUILD == 'yes' && env.ZHANLU_VS_REF == ''
       # zhanlu_change end
 
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for the legacy extension
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
-      - name: Get and build zhanlu-vs
+      - name: Get and build the legacy extension
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
           # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
@@ -408,9 +408,9 @@ jobs:
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
-      - name: Get and build zhanlu-loc (Chinese Language Pack)
+      - name: Get and build the language pack
         env:
-          ZHANLU_LOC_REPO_URL: https://github.com/village-way/zhanlu-loc.git
+          ZHANLU_LOC_REPO_URL: ${{ vars.LOC_REPO_URL }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_zhanlu_loc.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
@@ -516,7 +516,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh # zhanlu_change - WinGet helper scripts live in zhanlu-code

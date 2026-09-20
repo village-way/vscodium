@@ -25,14 +25,14 @@ make_tmp() {
 }
 
 # 设置默认仓库（如果未设置）- 必须在加载 utils.sh 之前设置
-ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-village-way/vscodium}"
+ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" # zhanlu_change - default to the workflow repository
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 KILO_VERSION="${KILO_VERSION:-1.2.0}"
-GITLAB_HOST="${GITLAB_HOST:-http://gitlab.cmss.com}"
-GITLAB_GROUP="${GITLAB_GROUP:-AI_engine/zhanlu}"
-GITLAB_RELEASE_REPOS="${GITLAB_RELEASE_REPOS:-zhanlu-cloud zhanlu-code zhanlu-core zhanlu-loc zhanlu-vs}"
-ZHANLU_IDE_ROOT="${ZHANLU_IDE_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
-GITLAB_FORCE_TAG_UPDATE="${GITLAB_FORCE_TAG_UPDATE:-false}"
+# zhanlu_change start - the source-side release hook lives in the private source tree
+# -g runs it after the GitHub release is created; ZHANLU_GITLAB_RELEASE_SCRIPT points at it.
+ZHANLU_GITLAB_RELEASE_SCRIPT="${ZHANLU_GITLAB_RELEASE_SCRIPT:-}"
+ZHANLU_WORKSPACE_ROOT="${ZHANLU_WORKSPACE_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+# zhanlu_change end
 PRINT_VERSION_ONLY=false
 DRY_RUN_VERSION=false
 SYNC_GITLAB=
@@ -68,7 +68,7 @@ while [[ $# -gt 0 ]]; do
 Usage: ./create-release.sh [-g] [--print-version|--dry-run-version]
 
 Options:
-  -g                  同步 GitLab tag 与 Release（默认仅 GitHub）
+  -g                  Run the source-side release hook (ZHANLU_GITLAB_RELEASE_SCRIPT) after the GitHub release
   --print-version     Print only the resolved release version and exit
   --dry-run-version   Print RELEASE_VERSION=<version> and exit
   --source-branch     zhanlu-code branch/ref, default develop
@@ -92,151 +92,22 @@ log_version() {
 # 加载工具函数和环境变量
 . "${SCRIPT_DIR}/utils.sh"
 
-remote_tag_sha() {
-    local dir="$1"
-    local tag="$2"
-    local refs
-    local peeled
-    local direct
-
-    refs="$(git -C "${dir}" ls-remote origin "refs/tags/${tag}" "refs/tags/${tag}^{}")"
-    peeled="$(printf "%s\n" "${refs}" | awk '/\^\{\}$/ {print $1; exit}')"
-    if [[ -n "${peeled}" ]]; then
-        echo "${peeled}"
-        return
-    fi
-
-    direct="$(printf "%s\n" "${refs}" | awk '{print $1; exit}')"
-    if [[ -n "${direct}" ]]; then
-        echo "${direct}"
-    fi
-}
-
-ensure_gitlab_tag() {
-    local dir="$1"
-    local tag="$2"
-    local sha="$3"
-    local remote
-    local local_sha
-    local push_nv=()
-
-    if [[ "$(basename "${dir}")" == "zhanlu-core" ]]; then
-        push_nv=(--no-verify)
-    fi
-
-    remote="$(remote_tag_sha "${dir}" "${tag}")"
-    if [[ -z "${remote}" ]]; then
-        if git -C "${dir}" rev-parse -q --verify "refs/tags/${tag}" &>/dev/null; then
-            local_sha="$(git -C "${dir}" rev-list -n 1 "refs/tags/${tag}")"
-            if [[ "${local_sha}" != "${sha}" ]]; then
-                git -C "${dir}" tag -f "${tag}" "${sha}"
-            fi
-        else
-            git -C "${dir}" tag "${tag}" "${sha}"
-        fi
-
-        git -C "${dir}" push "${push_nv[@]}" origin "refs/tags/${tag}"
-        echo "GitLab tag ${tag} 已推送"
-        return
-    fi
-
-    if [[ "${remote}" == "${sha}" ]]; then
-        echo "GitLab tag ${tag} 已存在且指向当前提交"
-        return
-    fi
-
-    if [[ "${GITLAB_FORCE_TAG_UPDATE}" != "true" ]]; then
-        echo "错误: GitLab tag ${tag} 已存在但指向不同提交"
-        echo "  remote: ${remote}"
-        echo "  target: ${sha}"
-        echo "如需强制移动 tag，请设置 GITLAB_FORCE_TAG_UPDATE=true"
-        exit 1
-    fi
-
-    git -C "${dir}" tag -f "${tag}" "${sha}"
-    git -C "${dir}" push "${push_nv[@]}" -f origin "refs/tags/${tag}"
-    echo "GitLab tag ${tag} 已强制更新"
-}
-
-write_gitlab_notes() {
-    local repo="$1"
-    local dir="$2"
-    local tag="$3"
-    local sha="$4"
-    local file="$5"
-    local short
-    local prev
-    local range
-    local commits
-
-    short="$(git -C "${dir}" rev-parse --short "${sha}")"
-    prev="$(git -C "${dir}" describe --tags --abbrev=0 --exclude "${tag}" "${sha}" 2>/dev/null || true)"
-
-    if [[ -n "${prev}" ]]; then
-        range="${prev}..${short}"
-        commits="$(git -C "${dir}" log --no-merges --oneline "${prev}..${sha}")"
-    else
-        range="initial history through ${short}"
-        commits="$(git -C "${dir}" log --no-merges --oneline -20 "${sha}")"
-    fi
-
-    {
-        echo "# ${tag}"
-        echo
-        echo "- Repository: ${repo}"
-        echo "- Commit: ${short}"
-        echo "- Range: ${range}"
-        echo
-        echo "## Commits"
-        echo
-        if [[ -n "${commits}" ]]; then
-            printf "%s\n" "${commits}" | sed "s/^/- /"
-        else
-            echo "- No commit changes since previous tag."
-        fi
-    } > "${file}"
-}
-
+# zhanlu_change start - GitLab tags/releases are created by the private hook, not here
 sync_gitlab_releases() {
-    if ! command -v glab &>/dev/null; then
-        echo "错误: 未找到 glab，请先安装 GitLab CLI"
+    if [[ -z "${ZHANLU_GITLAB_RELEASE_SCRIPT}" ]]; then
+        echo "错误: -g 需要设置 ZHANLU_GITLAB_RELEASE_SCRIPT 指向源码侧发布脚本"
         exit 1
     fi
-
-    if [[ -z "${GITLAB_TOKEN:-}" && -z "${GITLAB_ACCESS_TOKEN:-}" ]]; then
-        echo "错误: 请通过 GITLAB_TOKEN 或 GITLAB_ACCESS_TOKEN 提供 GitLab token"
+    if [[ ! -f "${ZHANLU_GITLAB_RELEASE_SCRIPT}" ]]; then
+        echo "错误: ZHANLU_GITLAB_RELEASE_SCRIPT 不存在: ${ZHANLU_GITLAB_RELEASE_SCRIPT}"
         exit 1
     fi
-
-    echo "同步 GitLab Release: ${GITLAB_TAG}"
-
-    local repo
-    for repo in ${GITLAB_RELEASE_REPOS}; do
-        local dir="${ZHANLU_IDE_ROOT}/${repo}"
-        local project="${GITLAB_HOST%/}/${GITLAB_GROUP}/${repo}"
-        local sha
-        local notes
-
-        if [[ ! -d "${dir}/.git" && ! -f "${dir}/.git" ]]; then
-            echo "错误: ${dir} 不是 git 仓库"
-            exit 1
-        fi
-
-        sha="$(git -C "${dir}" rev-parse HEAD)"
-        echo "处理 ${repo}: ${sha}"
-
-        ensure_gitlab_tag "${dir}" "${GITLAB_TAG}" "${sha}"
-
-        notes="$(make_tmp)"
-        write_gitlab_notes "${repo}" "${dir}" "${GITLAB_TAG}" "${sha}" "${notes}"
-
-        glab release create "${GITLAB_TAG}" \
-            --repo "${project}" \
-            --ref "${sha}" \
-            --name "${GITLAB_TAG}" \
-            --notes-file "${notes}"
-    done
+    echo "运行源码侧发布脚本: ${GITLAB_TAG}"
+    GITLAB_TAG="${GITLAB_TAG}" RELEASE_VERSION="${VERSION}" RELEASE_DATE="${RELEASE_DATE}" \
+        ZHANLU_WORKSPACE_ROOT="${ZHANLU_WORKSPACE_ROOT}" \
+        bash "${ZHANLU_GITLAB_RELEASE_SCRIPT}"
 }
+# zhanlu_change end
 
 # 动态获取版本号
 # 优先从环境变量 RELEASE_VERSION 获取
@@ -315,7 +186,7 @@ if [[ ! "${RELEASE_DATE}" =~ ^[0-9]{8}$ ]]; then
     exit 1
 fi
 
-GITLAB_TAG="release_zhanlu-ide_v${VERSION}_${RELEASE_DATE}"
+GITLAB_TAG="${GITLAB_TAG:-release_zhanlu-code_v${VERSION}_${RELEASE_DATE}}" # zhanlu_change - source-side tag name, new prefix since the zhanlu-core entry repository
 
 # zhanlu_change start - default GitHub releases to draft; set RELEASE_DRAFT=false to publish
 RELEASE_DRAFT="${RELEASE_DRAFT:-true}"

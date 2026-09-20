@@ -36,6 +36,7 @@ jobs:
       APP_NAME: Zhanlu
       APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
       ASSETS_REPOSITORY: ${{ github.repository }}
+      SOURCE_REPOSITORY: ${{ vars.SOURCE_REPOSITORY }} # zhanlu_change - private source repository, configured per repository
       BINARY_NAME: zhanlu
       GH_REPO_PATH: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
