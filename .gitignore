@@ -1,5 +1,4 @@
 vscode*
-zhanlu-vs/
 VS*/*
 VSCode*
 VSCodium*
@@ -22,10 +21,28 @@ stores/snapcraft/stable/*.snap
 # Private source repository (fetched by fetch_source.sh)
 .source-repo/
 
+# files copied in from the private source at run time (fetch_source.sh)
+/build/
+/dev/
+/docs/
+/delivery-profiles/
+/icons/
+/patches/
+/src/
+/stores/
+/*.sh
+!/create-release.sh
+!/fetch_source.sh
+!/utils.sh
+/product.json
+/announcements-*.json
+/npmrc
+/.git-msg
+/*.md
+!/README.md
+
+# release metadata, signing material and local staging
+.zhanlu/
 certs/
-Zhanlu.zip
-docs/macos-code-signing.md
 sign-local.sh
-Zhanlu-*.zip
-.zhanlu
-docs/stable-build-workflows.md
+*.zip

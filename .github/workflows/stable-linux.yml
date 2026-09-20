@@ -107,7 +107,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -152,18 +152,18 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - name: Checkout zhanlu-code source
+      - name: Checkout source
         uses: actions/checkout@v6
         with:
-          repository: village-way/zhanlu-code
+          repository: ${{ vars.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_COMMIT || env.ZHANLU_CODE_SOURCE_BRANCH }}
           token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           path: zhanlu-code-source
 
-      - name: Checkout zhanlu-vs
+      - name: Checkout the legacy extension
         uses: actions/checkout@v6
         with:
-          repository: village-way/zhanlu-vs
+          repository: ${{ vars.LEGACY_EXT_REPOSITORY }}
           ref: ${{ env.ZHANLU_VS_REF || 'develop' }}
           token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           path: zhanlu-vs-bridge
@@ -218,7 +218,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -277,7 +277,7 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for the legacy extension
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
@@ -299,9 +299,9 @@ jobs:
         if: env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
 
-      - name: Get and build zhanlu-vs
+      - name: Get and build the legacy extension
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
           # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
@@ -311,9 +311,9 @@ jobs:
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
-      - name: Get and build zhanlu-loc (Chinese Language Pack)
+      - name: Get and build the language pack
         env:
-          ZHANLU_LOC_REPO_URL: https://github.com/village-way/zhanlu-loc.git
+          ZHANLU_LOC_REPO_URL: ${{ vars.LOC_REPO_URL }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_zhanlu_loc.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
@@ -428,7 +428,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -441,7 +441,7 @@ jobs:
           name: vscode
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Restore Agent source from zhanlu-core artifact
+      - name: Restore Agent source from the core artifact
         run: |
           ./scripts/restore-zhanlu-agent-source.sh
           # agent-web esbuild imports host modules from vscode/src; restore only unpacks zhanlu-agent.
@@ -471,7 +471,7 @@ jobs:
         run: ./check_tags.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for the legacy extension
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
@@ -501,9 +501,9 @@ jobs:
         if: env.DISABLED != 'yes' && env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && matrix.runtime_target != '' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
 
-      - name: Get and build zhanlu-vs
+      - name: Get and build the legacy extension
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
           # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
@@ -580,7 +580,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -612,9 +612,9 @@ jobs:
         run: sudo apt-get update -y && sudo apt-get install -y zip
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Prepare Zhanlu CLI compatibility assets
+      - name: Prepare CLI compatibility assets
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: bash ./prepare_zhanlu_cli_assets.sh
@@ -691,7 +691,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -751,18 +751,18 @@ jobs:
           name: vscode
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Restore Agent source from zhanlu-core artifact
+      - name: Restore Agent source from the core artifact
         run: ./scripts/restore-zhanlu-agent-source.sh
         if: env.DISABLED != 'yes' && env.ZHANLU_VS_REF == '' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for the legacy extension
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Get and build zhanlu-vs CLI for target arch
+      - name: Get and build the legacy extension CLI for target arch
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_CLI_ONLY: 'yes'
@@ -829,7 +829,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -878,18 +878,18 @@ jobs:
           name: vscode
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Restore Agent source from zhanlu-core artifact
+      - name: Restore Agent source from the core artifact
         run: ./scripts/restore-zhanlu-agent-source.sh
         if: env.DISABLED != 'yes' && env.ZHANLU_VS_REF == '' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
-      - name: Write root .env for zhanlu-vs
+      - name: Write root .env for the legacy extension
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Get and build zhanlu-vs CLI for target arch
+      - name: Get and build the legacy extension CLI for target arch
         env:
-          ZHANLU_REPO_URL: https://github.com/village-way/zhanlu-vs.git
+          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_CLI_ONLY: 'yes'
@@ -970,7 +970,7 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: https://github.com/village-way/zhanlu-code.git
+          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./fetch_source.sh
@@ -1047,5 +1047,5 @@ jobs:
         uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          repository: ${{ vars.LINUX_REPOSITORIES_REPO || 'village-way/zhanlu-repositories-linux' }} # zhanlu_change - avoid dispatching Zhanlu releases to VSCodium
+          repository: ${{ vars.LINUX_REPOSITORIES_REPO }} # zhanlu_change - repository target comes from a repository variable
           event-type: deploy

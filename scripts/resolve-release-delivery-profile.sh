@@ -5,7 +5,7 @@ resolve_release_delivery_profile() {
     local source_ref="$1"
     local profile_id="$2"
     local current_assets_repository="$3"
-    local source_repository="${ZHANLU_CODE_REPOSITORY:-village-way/zhanlu-code}"
+    local source_repository="${ZHANLU_CODE_REPOSITORY:-${SOURCE_REPOSITORY:-}}" # zhanlu_change - configured per repository
     local temp_root
     local archive
     local source_root

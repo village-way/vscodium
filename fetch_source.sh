@@ -9,7 +9,13 @@ set -e
 _CURRENT_DIR="$(pwd)"
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-SOURCE_REPO_URL="${SOURCE_REPO_URL:-https://github.com/village-way/zhanlu-code.git}"
+# zhanlu_change start - the private source repository is configured per repository (Actions variable), never hard-coded here
+SOURCE_REPO_URL="${SOURCE_REPO_URL:-}"
+if [[ -z "${SOURCE_REPO_URL}" ]]; then
+    echo "Error: SOURCE_REPO_URL is required (set the repository variable SOURCE_REPO_URL)" >&2
+    exit 1
+fi
+# zhanlu_change end
 SOURCE_BRANCH="${SOURCE_BRANCH:-develop}"
 # zhanlu_change - platform fan-out may pin the exact zhanlu-code commit resolved during release preparation
 REQUESTED_SOURCE_COMMIT="${SOURCE_COMMIT:-}"
