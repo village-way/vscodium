@@ -162,6 +162,15 @@ elif [[ "${DRY_RUN_VERSION}" == "true" ]]; then
 fi
 
 # zhanlu_change start - validate the profile, exact source commit and allowlisted target before touching a release
+# Outside GitHub Actions GITHUB_REPOSITORY is unset; fall back to the checkout's repository instead of
+# pinning an empty assetsRepository that every later trigger would reject.
+if [[ -z "${ASSETS_REPOSITORY}" ]]; then
+    ASSETS_REPOSITORY="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+fi
+if [[ -z "${ASSETS_REPOSITORY}" ]]; then
+    echo "错误: 无法确定 Release 仓库，请设置 ASSETS_REPOSITORY（如 owner/repo）"
+    exit 1
+fi
 source "${SCRIPT_DIR}/scripts/resolve-release-delivery-profile.sh"
 prepare_release_delivery_profile "${SOURCE_BRANCH}" "${ZHANLU_DELIVERY_PROFILE}" "${ASSETS_REPOSITORY}"
 ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"

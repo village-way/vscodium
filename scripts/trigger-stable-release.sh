@@ -324,9 +324,15 @@ resolve_delivery_pin() {
         pinned_version="$(jq -r '.releaseVersion // empty' "${metadata}")"
         pinned_profile="$(jq -r '.deliveryProfile' "${metadata}")"
         pinned_ref="$(jq -r '.sourceRef' "${metadata}")"
-        pinned_repository="$(jq -r '.assetsRepository' "${metadata}")"
+        pinned_repository="$(jq -r '.assetsRepository // empty' "${metadata}")"
+        if [[ -z "${pinned_repository}" ]]; then
+            print_error "Release ${RELEASE_VERSION} 的 zhanlu-delivery.json 缺少 assetsRepository（创建时未设置 ASSETS_REPOSITORY/GITHUB_REPOSITORY）"
+            print_error "请修正该 Release 的元数据或改用新的 --release-version 重新创建"
+            rm -rf "${metadata_dir}"
+            exit 1
+        fi
         if [[ -n "${pinned_version}" && "${pinned_version}" != "${RELEASE_VERSION}" ]] || \
-            [[ "${pinned_profile}" != "${DELIVERY_PROFILE}" || "${pinned_ref}" != "${SOURCE_BRANCH}" || -z "${pinned_repository}" ]]; then
+            [[ "${pinned_profile}" != "${DELIVERY_PROFILE}" || "${pinned_ref}" != "${SOURCE_BRANCH}" ]]; then
             print_error "Release ${RELEASE_VERSION} 已固定为 profile=${pinned_profile}, sourceRef=${pinned_ref}, repo=${pinned_repository}"
             rm -rf "${metadata_dir}"
             exit 1
