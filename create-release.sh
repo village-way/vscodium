@@ -280,6 +280,7 @@ if [[ ! -f "release_notes.md" ]]; then
     gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}" "${DRAFT_FLAG}" # zhanlu_change - update notes and visibility together
     upload_delivery_metadata # zhanlu_change
     [[ -n "${SYNC_GITLAB}" ]] && sync_gitlab_releases
+    echo "RELEASE_VERSION=${VERSION}" # zhanlu_change - spearhead parses this when release_notes.md is absent
     exit 0
 fi
 
