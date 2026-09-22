@@ -234,13 +234,6 @@ jobs:
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
-      - name: Get and build the language pack
-        env:
-          ZHANLU_LOC_REPO_URL: ${{ vars.LOC_REPO_URL }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-        run: ./get_zhanlu_loc.sh
-        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
-
       - name: Get Open Remote SSH / WSL builtin extensions
         run: ./get_zhanlu_remote_exts.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
@@ -406,13 +399,6 @@ jobs:
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
           ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
         run: ./get_zhanlu.sh
-        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
-
-      - name: Get and build the language pack
-        env:
-          ZHANLU_LOC_REPO_URL: ${{ vars.LOC_REPO_URL }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-        run: ./get_zhanlu_loc.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
       - name: Get Open Remote SSH / WSL builtin extensions
