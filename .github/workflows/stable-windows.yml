@@ -405,6 +405,39 @@ jobs:
         run: ./get_zhanlu_remote_exts.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
+      # zhanlu_change start - windows-11-arm now ships VS 2026; preinstall and node-gyp 11 only accept VS 2022
+      - name: Install Visual Studio 2022 C++ build tools
+        if: env.SHOULD_BUILD == 'yes' && matrix.vscode_arch == 'arm64'
+        shell: pwsh
+        run: |
+          $existing = @(
+            "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise",
+            "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools"
+          ) | Where-Object { Test-Path $_ }
+          if ($existing) {
+            Write-Host "Visual Studio 2022 already present: $($existing -join ', ')"
+            exit 0
+          }
+          $installer = Join-Path $env:TEMP "vs_buildtools.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile $installer
+          & $installer --wait --quiet --norestart --nocache `
+            --add Microsoft.VisualStudio.Workload.VCTools `
+            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
+            --add Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre `
+            --add Microsoft.VisualStudio.Component.VC.ATL.ARM64 `
+            --add Microsoft.VisualStudio.Component.VC.ATL.ARM64.Spectre `
+            --add Microsoft.VisualStudio.Component.Windows11SDK.26100 `
+            --includeRecommended
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+            exit $LASTEXITCODE
+          }
+          $installed = "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools"
+          if (-not (Test-Path $installed)) {
+            Write-Error "VS 2022 Build Tools were not installed at $installed"
+            exit 1
+          }
+      # zhanlu_change end
+
       - name: Build
         env:
           GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }} # zhanlu_change - customer asset repositories require cross-repo access
