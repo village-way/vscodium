@@ -2,7 +2,13 @@
 # shellcheck disable=SC1091
 # 确保已安装 gh CLI 并已登录
 
+set +x # zhanlu_change - keep release credentials out of traces
 set -e
+
+# zhanlu_change start - checkout does not persist credentials; authenticate each network operation
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/secure-git.sh"
+export ZHANLU_GITHUB_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-${ZHANLU_GITHUB_TOKEN:-}}}"
+# zhanlu_change end
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
@@ -226,7 +232,7 @@ VERSION_CLEAN="${VERSION%-insider}"
 
 # 确保 tag 存在（如果不存在则创建）
 # zhanlu_change start - unique empty commit per new tag so GitHub Release created_at advances
-if ! git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
+if ! secure_git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
     echo "远程仓库不存在 tag: ${VERSION}，正在创建..."
     if git rev-parse "${VERSION}" &>/dev/null; then
         echo "本地已存在 tag: ${VERSION}，将直接推送到远程"
@@ -234,10 +240,10 @@ if ! git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
         # GitHub sets release created_at from the tagged commit date, not draft/upload time.
         echo "创建 empty commit，使 Release created_at 对应该发版时刻..."
         git commit --allow-empty -m "release: ${VERSION}"
-        git push origin HEAD
+        secure_git push origin HEAD
         git tag "${VERSION}"
     fi
-    git push origin "${VERSION}"
+    secure_git push origin "${VERSION}"
     echo "Tag ${VERSION} 已推送到远程仓库"
 fi
 # zhanlu_change end

@@ -103,6 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
       - name: Fetch source code from private repository
@@ -115,6 +116,7 @@ jobs:
       - name: Switch to relevant branch
         env:
           PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
         run: ./get_pr.sh
 
       - name: Clone VSCode repo
@@ -155,6 +157,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           repository: ${{ vars.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_COMMIT || env.ZHANLU_CODE_SOURCE_BRANCH }}
           token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
@@ -163,12 +166,15 @@ jobs:
       - name: Checkout the legacy extension
         uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           repository: ${{ vars.LEGACY_EXT_REPOSITORY }}
           ref: ${{ env.ZHANLU_VS_REF || 'develop' }}
           token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           path: zhanlu-vs-bridge
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: # zhanlu_change - private build outputs must not enter public caches
+          cache: false # zhanlu_change
 
       - name: Install native Bridge build dependencies
         run: sudo apt-get update -y && sudo apt-get install -y binutils file jq musl-tools
@@ -213,6 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.SHOULD_BUILD == 'yes'
 
@@ -227,6 +234,7 @@ jobs:
       - name: Switch to relevant branch
         env:
           PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
         run: ./get_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -334,19 +342,25 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Compress vscode artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }} # zhanlu_change
         run: |
+          node scripts/source-artifact.mjs check
           find vscode -type f -not -path "*/node_modules/*" -not -path "vscode/.build/node/*" -not -path "vscode/.git/*" > vscode.txt
           echo "vscode/.build/extensions/node_modules" >> vscode.txt
-          echo "vscode/.git" >> vscode.txt
-          tar -czf vscode.tar.gz -T vscode.txt
+          # zhanlu_change - exclude local metadata and credentials even inside encrypted intermediates
+          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.npmrc' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -czf vscode.tar.gz -T vscode.txt
+          node scripts/source-artifact.mjs encrypt vscode.tar.gz vscode.tar.gz.enc
+          rm vscode.tar.gz
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Upload vscode artifact
         uses: actions/upload-artifact@v7
         with:
           name: vscode
-          path: ./vscode.tar.gz
-          retention-days: ${{ needs.check.outputs.SHOULD_DEPLOY == 'yes' && 30 || 1 }}
+          path: ./vscode.tar.gz.enc # zhanlu_change - ciphertext only
+          if-no-files-found: error # zhanlu_change - never silently skip protected output
+          retention-days: 1 # zhanlu_change - encrypted intermediate only
         if: env.SHOULD_BUILD == 'yes'
 
   build:
@@ -416,6 +430,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
@@ -434,6 +449,13 @@ jobs:
           name: vscode
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
+
+      - name: Authenticate and decrypt source artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: node scripts/source-artifact.mjs decrypt vscode.tar.gz.enc vscode.tar.gz
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
       - name: Restore Agent source from the core artifact
         run: |
           ./scripts/restore-zhanlu-agent-source.sh
@@ -445,6 +467,7 @@ jobs:
       - name: Switch to relevant branch
         env:
           PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
         run: ./get_pr.sh
         if: env.DISABLED != 'yes'
 
@@ -511,6 +534,8 @@ jobs:
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: # zhanlu_change - private build outputs must not enter public caches
+          cache: false # zhanlu_change
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - name: Build
@@ -568,6 +593,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.SHOULD_BUILD == 'yes'
 
@@ -679,6 +705,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes'
 
@@ -693,6 +720,7 @@ jobs:
       - name: Switch to relevant branch
         env:
           PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
         run: ./get_pr.sh
         if: env.DISABLED != 'yes'
 
@@ -742,6 +770,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: vscode
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+
+
+      - name: Authenticate and decrypt source artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: node scripts/source-artifact.mjs decrypt vscode.tar.gz.enc vscode.tar.gz
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
       - name: Restore Agent source from the core artifact
@@ -818,6 +853,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
       - name: Fetch source code from private repository
@@ -830,6 +866,7 @@ jobs:
       - name: Switch to relevant branch
         env:
           PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
         run: ./get_pr.sh
 
       - name: Setup GCC
@@ -869,6 +906,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: vscode
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+
+
+      - name: Authenticate and decrypt source artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: node scripts/source-artifact.mjs decrypt vscode.tar.gz.enc vscode.tar.gz
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
       - name: Restore Agent source from the core artifact
@@ -959,6 +1003,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
       - name: Fetch source code from private repository
@@ -971,6 +1016,7 @@ jobs:
       - name: Switch to relevant branch
         env:
           PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
         run: ./get_pr.sh
 
       - name: Check version

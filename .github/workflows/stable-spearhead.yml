@@ -52,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
 
       - name: Setup Node.js environment

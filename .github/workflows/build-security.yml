@@ -1,0 +1,25 @@
+# zhanlu_change - new file
+# Verify source confidentiality and ephemeral authentication without production secrets.
+
+name: build-security
+on:
+  pull_request:
+  push:
+    branches: [develop]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node --test scripts/tests/build-security.test.mjs
+        shell: bash

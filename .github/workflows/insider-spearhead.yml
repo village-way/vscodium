@@ -38,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
       - name: Fetch source code from private repository
@@ -89,26 +90,12 @@ jobs:
         if: env.SHOULD_BUILD == 'yes' && github.event.inputs.dont_update != 'true'
 
       - name: Update upstream version
+        env:
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral write credential
         run: ./update_upstream.sh
         if: env.SHOULD_BUILD == 'yes' && github.event.inputs.dont_update != 'true'
 
-      - name: Prepare source
-        run: ./prepare_src.sh
-        if: env.SHOULD_BUILD == 'yes'
-
-      - name: Upload sourcemaps
-        env:
-          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          GITHUB_USERNAME: ${{ github.repository_owner }}
-        run: ./upload_sourcemaps.sh
-        if: env.SHOULD_BUILD == 'yes'
-
-      - name: Release source
-        env:
-          GITHUB_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          GITHUB_USERNAME: ${{ github.repository_owner }}
-        run: ./release.sh
-        if: env.SHOULD_BUILD == 'yes'
+      # zhanlu_change - source archives and source maps are never release assets
 
       - name: Dispatch builds
         uses: peter-evans/repository-dispatch@v4
