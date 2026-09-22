@@ -99,6 +99,7 @@ test('every source artifact upload is ciphertext and every consumer authenticate
         assert.equal(step.match(/\n        if: (.+)/)?.[1], steps[index + 1].match(/\n        if: (.+)/)?.[1]);
       }
       if (/uses: actions\/checkout@/.test(step)) assert.match(step, /persist-credentials: false/);
+      if (/uses: actions-rust-lang\/setup-rust-toolchain@/.test(step)) assert.match(step, /cache: false/);
     }
     assert.doesNotMatch(source, /run: \.\/(?:prepare_src|upload_sourcemaps)\.sh/);
   }

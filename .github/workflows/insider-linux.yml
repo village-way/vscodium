@@ -307,6 +307,8 @@ jobs:
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: # zhanlu_change - private build outputs must not enter public caches
+          cache: false # zhanlu_change
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - name: Download vscode artifact
