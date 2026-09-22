@@ -42,9 +42,17 @@ resolve_release_delivery_profile() {
     else
         ZHANLU_DELIVERY_ASSETS_REPOSITORY="$(jq -r '.assetsRepository' <<<"${result}")"
     fi
+    if [[ -f "${source_root}/release_notes.md" ]]; then
+        ZHANLU_RELEASE_NOTES_TEMPLATE="$(mktemp)"
+        cp "${source_root}/release_notes.md" "${ZHANLU_RELEASE_NOTES_TEMPLATE}"
+        if [[ -n "${TMP_FILES+x}" ]]; then
+            TMP_FILES+=("${ZHANLU_RELEASE_NOTES_TEMPLATE}")
+        fi
+    fi
     rm -rf "${temp_root}"
     export ZHANLU_DELIVERY_PROFILE ZHANLU_DELIVERY_SOURCE_COMMIT
     export ZHANLU_DELIVERY_PROFILE_DIGEST ZHANLU_DELIVERY_ASSETS_REPOSITORY
+    export ZHANLU_RELEASE_NOTES_TEMPLATE
 }
 
 prepare_release_delivery_profile() {

@@ -268,8 +268,18 @@ if [[ "${VSCODE_QUALITY}" == "insider" ]] && [[ "${UPDATE_EXISTING}" == "false" 
 fi
 # zhanlu_change end
 
-# 检查 release_notes.md 模板是否存在
-if [[ ! -f "release_notes.md" ]]; then
+# zhanlu_change start - thin public checkout has no template; use the pinned zhanlu-code copy
+RELEASE_NOTES_TEMPLATE=""
+if [[ -f "${SCRIPT_DIR}/release_notes.md" ]]; then
+    RELEASE_NOTES_TEMPLATE="${SCRIPT_DIR}/release_notes.md"
+elif [[ -n "${ZHANLU_RELEASE_NOTES_TEMPLATE:-}" && -f "${ZHANLU_RELEASE_NOTES_TEMPLATE}" ]]; then
+    RELEASE_NOTES_TEMPLATE="${ZHANLU_RELEASE_NOTES_TEMPLATE}"
+    echo "使用已固定源码提交中的 release notes 模板"
+elif [[ -f "${ZHANLU_WORKSPACE_ROOT}/zhanlu-code/release_notes.md" ]]; then
+    RELEASE_NOTES_TEMPLATE="${ZHANLU_WORKSPACE_ROOT}/zhanlu-code/release_notes.md"
+    echo "使用源码树中的 release notes 模板: ${RELEASE_NOTES_TEMPLATE}"
+fi
+if [[ -z "${RELEASE_NOTES_TEMPLATE}" ]]; then # zhanlu_change - resolve the notes template before falling back
     echo "警告: release_notes.md 模板文件不存在，将使用简单的 release notes"
     if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
         NOTES="update vscode to [${MS_COMMIT:-${MS_TAG}}](https://github.com/microsoft/vscode/tree/${MS_COMMIT:-${MS_TAG}})"
@@ -286,7 +296,16 @@ fi
 
 # 复制模板文件用于处理
 RELEASE_NOTES_FILE="$(make_tmp)"
-cp release_notes.md "${RELEASE_NOTES_FILE}"
+cp "${RELEASE_NOTES_TEMPLATE}" "${RELEASE_NOTES_FILE}" # zhanlu_change - template may come from the pinned source
+python3 - "${RELEASE_NOTES_FILE}" <<'PY' # zhanlu_change - keep ownership markers out of the published release body
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = re.sub(r"^[ \t]*<!-- zhanlu_change\b.*?-->[ \t]*\n", "", text, flags=re.M)
+text = re.sub(r"[ \t]*<!-- zhanlu_change\b.*?-->", "", text)
+path.write_text(text)
+PY
+# zhanlu_change end
 
 # 替换模板中的占位符
 if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
@@ -330,6 +349,7 @@ if [[ "${DRAFT_FLAG}" == "--draft" ]]; then
     replace "s|href=\"https://github.com/${ASSETS_REPOSITORY}/releases/download/[^\"]+\"|href=\"#user-content-assets\"|g" "${RELEASE_NOTES_FILE}"
     printf '\n<a id="assets"></a>\n## Assets\n\nDraft release: download artifacts from the GitHub Assets section below.\n' >> "${RELEASE_NOTES_FILE}"
 fi
+# zhanlu_change end
 
 # zhanlu_change start - retain human-readable and machine-readable delivery provenance
 DELIVERY_METADATA_JSON="$(jq -cn \
@@ -345,7 +365,6 @@ printf '\n<!-- zhanlu-delivery %s -->\n' "${DELIVERY_METADATA_JSON}" >> "${RELEA
 echo "更新 Release notes..."
 gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}" "${DRAFT_FLAG}"
 upload_delivery_metadata # zhanlu_change - platform triggers reuse this exact pin
-# zhanlu_change end
 
 if [[ -n "${SYNC_GITLAB}" ]]; then
     sync_gitlab_releases
