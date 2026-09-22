@@ -100,6 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
       - name: Fetch source code from private repository
@@ -112,6 +113,7 @@ jobs:
       - name: Switch to relevant branch
         env:
           PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
+          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
         run: . get_pr.sh
 
       - name: Setup Node.js environment

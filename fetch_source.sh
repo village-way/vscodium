@@ -3,6 +3,7 @@
 # Fetch Source Code from Private Repository
 # 从私有仓库获取所有源代码和构建脚本
 
+set +x # zhanlu_change - build credentials must never enter shell traces
 set -e
 
 # 保存当前目录
@@ -42,29 +43,11 @@ if [[ "${ZHANLU_DELIVERY_PROFILE:-default}" != "default" ]]; then
 fi
 # zhanlu_change end
 
-# 如果提供了 GitHub token，则将 token 嵌入到 URL 中
-# 这对于访问私有仓库是必需的
-if [[ -n "${ZHANLU_GITHUB_TOKEN}" ]]; then
-    # 将 https://github.com/user/repo.git 转换为 https://token@github.com/user/repo.git
-    SOURCE_REPO_URL="${SOURCE_REPO_URL/https:\/\//https://${ZHANLU_GITHUB_TOKEN}@}"
-    echo "Using GitHub token for authentication (private repository)"
-    
-    # 配置 Git credential helper 以避免交互式密码提示
-    git config --global credential.helper store
-    # 禁用交互式提示
-    export GIT_TERMINAL_PROMPT=0
-    export GIT_ASKPASS=/bin/echo
-fi
-
+# zhanlu_change start - keep credentials out of URLs, logs and Git configuration
+source "${_SCRIPT_DIR}/scripts/secure-git.sh"
+validate_source_url "${SOURCE_REPO_URL}"
 echo "=== Source Code Fetching Script ==="
-# 安全地显示 URL（隐藏 token）
-if [[ "${SOURCE_REPO_URL}" =~ ^https://.*@github\.com ]]; then
-    # 如果 URL 包含 token，则隐藏它
-    DISPLAY_URL="${SOURCE_REPO_URL/@*/@***}"
-    echo "SOURCE_REPO_URL: ${DISPLAY_URL}"
-else
-    echo "SOURCE_REPO_URL: ${SOURCE_REPO_URL}"
-fi
+# zhanlu_change end
 echo "SOURCE_BRANCH: ${SOURCE_BRANCH}"
 echo "SOURCE_COMMIT: ${REQUESTED_SOURCE_COMMIT:-<resolve from branch>}" # zhanlu_change
 echo "SOURCE_DIR: ${SOURCE_DIR}"
@@ -88,14 +71,12 @@ if [[ -d "${SOURCE_DIR}/.git" ]]; then
     cd "${SOURCE_DIR}"
     git config core.autocrlf false # zhanlu_change - preserve release-pinned Profile bytes on Windows
     
-    # 更新 remote URL（如果提供了 token，需要更新）
-    if [[ -n "${ZHANLU_GITHUB_TOKEN}" ]]; then
-        git remote set-url origin "${SOURCE_REPO_URL}"
-    fi
-    
+    # zhanlu_change - overwrite legacy credential-bearing remotes even without a token
+    git remote set-url origin "${SOURCE_REPO_URL}"
+
     # zhanlu_change start - prefer the pinned commit; retain branch-only compatibility
     SOURCE_FETCH_REF="${REQUESTED_SOURCE_COMMIT:-${SOURCE_BRANCH}}"
-    GIT_TERMINAL_PROMPT=0 git fetch origin "${SOURCE_FETCH_REF}" || {
+    secure_git fetch origin "${SOURCE_FETCH_REF}" || {
         echo "Error: Failed to fetch from origin. Check your token permissions."
         exit 1
     }
@@ -122,7 +103,7 @@ else
     # zhanlu_change start - fetch a release-pinned commit when supplied
     SOURCE_FETCH_REF="${REQUESTED_SOURCE_COMMIT:-${SOURCE_BRANCH}}"
     echo "Fetching source ref: ${SOURCE_FETCH_REF}"
-    GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SOURCE_FETCH_REF}" || {
+    secure_git fetch --depth 1 origin "${SOURCE_FETCH_REF}" || {
         echo "Error: Failed to clone repository. Check your token permissions."
         exit 1
     }
