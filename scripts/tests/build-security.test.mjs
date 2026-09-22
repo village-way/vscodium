@@ -75,7 +75,7 @@ test('Git does not persist credentials through a configured store helper', () =>
 });
 test('rejects credential-bearing and ambiguous repository URLs without echoing them', () => {
   for (const url of [`https://${canary}@github.com/example/repo.git`, `https://github.com/example/repo?token=${canary}`, `https://github.com/example/repo\n${canary}`]) {
-    const result = run('bash', ['-c', 'source "$1"; validate_source_url "$2"', 'test', path.join(root, 'scripts/secure-git.sh').replaceAll('\\', '/'), url]);
+    const result = run('bash', ['-c', 'source "$1"; validate_source_url "$SOURCE_URL_FIXTURE"', 'test', path.join(root, 'scripts/secure-git.sh').replaceAll('\\', '/')], { env: { SOURCE_URL_FIXTURE: url } });
     assert.notEqual(result.status, 0);
     assert.equal((result.stdout + result.stderr).includes(canary), false);
   }
@@ -83,7 +83,7 @@ test('rejects credential-bearing and ambiguous repository URLs without echoing t
 test('every source artifact upload is ciphertext and every consumer authenticates before use', () => {
   let producers = 0, consumers = 0;
   for (const file of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => name.endsWith('.yml'))) {
-    const source = fs.readFileSync(path.join(root, '.github/workflows', file), 'utf8');
+    const source = fs.readFileSync(path.join(root, '.github/workflows', file), 'utf8').replaceAll('\r\n', '\n');
     const steps = source.split(/\n      - /);
     for (let index = 0; index < steps.length; index++) {
       const step = steps[index];
@@ -112,7 +112,7 @@ test('real archive recipe excludes nested credentials and Git metadata', () => {
     fs.mkdirSync(path.dirname(path.join(cwd, name)), { recursive: true });
     fs.writeFileSync(path.join(cwd, name), name.endsWith('.js') || name.endsWith('.ts') ? 'source' : canary);
   }
-  const workflow = fs.readFileSync(path.join(root, '.github/workflows/stable-linux.yml'), 'utf8');
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/stable-linux.yml'), 'utf8').replaceAll('\r\n', '\n');
   const block = workflow.split('      - name: Compress vscode artifact\n')[1].split('\n      - name:')[0];
   const script = block.split('        run: |\n')[1].split('\n        if:')[0].replace(/^          /gm, '').replaceAll('scripts/source-artifact.mjs', JSON.stringify(path.join(root, 'scripts/source-artifact.mjs').replaceAll('\\', '/')));
   const env = { SOURCE_ARTIFACT_KEY: randomBytes(32).toString('hex') };

@@ -1,0 +1,5 @@
+
+# Keep executable scripts and workflow fixtures consistent on every runner.
+*.sh text eol=lf
+*.mjs text eol=lf
+.github/workflows/*.yml text eol=lf

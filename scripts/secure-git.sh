@@ -4,7 +4,7 @@
 
 _BUILD_GIT_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-credential-env.sh"
 validate_source_url() {
-  if [[ ! "$1" =~ ^https?://[a-zA-Z0-9.-]+/[a-zA-Z0-9_./-]+$ ]]; then
+  if [[ "$1" == *[[:space:]]* || ! "$1" =~ ^https?://[a-zA-Z0-9.-]+/[a-zA-Z0-9_./-]+$ ]]; then
     echo 'Error: repository URL must not contain credentials, query parameters or control characters' >&2
     return 1
   fi
