@@ -1,8 +1,11 @@
 // zhanlu_change - new file
-/* Exercise credential isolation, authenticated archives and workflow publication boundaries. */
+/*
+ * Exercise credential isolation, authenticated archives and workflow publication boundaries.
+ */
 
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { rootCertificates } from 'node:tls';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -115,6 +118,13 @@ test('real archive recipe excludes nested credentials and Git metadata', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/stable-linux.yml'), 'utf8').replaceAll('\r\n', '\n');
   const block = workflow.split('      - name: Compress vscode artifact\n')[1].split('\n      - name:')[0];
   const script = block.split('        run: |\n')[1].split('\n        if:')[0].replace(/^          /gm, '').replaceAll('scripts/source-artifact.mjs', JSON.stringify(path.join(root, 'scripts/source-artifact.mjs').replaceAll('\\', '/')));
+  fs.writeFileSync(path.join(cwd, 'vscode/.npmrc'), 'target=42.4.1\nruntime=electron\n');
+  fs.mkdirSync(path.join(cwd, 'vscode/remote'));
+  fs.writeFileSync(path.join(cwd, 'vscode/remote/.npmrc'), 'target=24.15.0\nruntime=node\n');
+  fs.writeFileSync(path.join(cwd, 'vscode/public-ca.pem'), rootCertificates[0]);
+  fs.writeFileSync(path.join(cwd, 'vscode/private.pem'), `-----BEGIN PRIVATE KEY-----\n${canary}\n-----END PRIVATE KEY-----`);
+  fs.writeFileSync(path.join(cwd, 'vscode/mixed.pem'), rootCertificates[0] + canary);
+  fs.writeFileSync(path.join(cwd, 'vscode/.build/extensions/node_modules/pkg/cert.pem'), rootCertificates[0]);
   const env = { SOURCE_ARTIFACT_KEY: randomBytes(32).toString('hex') };
   const result = run('bash', ['-ec', script], { cwd, env });
   assert.equal(result.status, 0, result.stderr);
@@ -124,6 +134,13 @@ test('real archive recipe excludes nested credentials and Git metadata', () => {
   assert.equal(listing.status, 0);
   assert.match(listing.stdout, /src\/source.ts/);
   assert.doesNotMatch(listing.stdout, /\.git\/|\.env/);
+  assert.match(listing.stdout, /vscode\/\.npmrc/);
+  assert.match(listing.stdout, /vscode\/remote\/\.npmrc/);
+  assert.match(listing.stdout, /vscode\/public-ca\.pem/);
+  assert.match(listing.stdout, /node_modules\/pkg\/cert\.pem/);
+  assert.doesNotMatch(listing.stdout, /private\.pem|mixed\.pem/);
+  assert.equal(run('tar', ['-xOzf', 'restored.tar.gz', 'vscode/public-ca.pem'], { cwd }).stdout, rootCertificates[0]);
+  assert.equal(run('tar', ['-xOzf', 'restored.tar.gz', 'vscode/remote/.npmrc'], { cwd }).stdout, 'target=24.15.0\nruntime=node\n');
 });
 
 test('failed fetch scrubs legacy remotes without writing or logging the canary token', () => {
@@ -164,4 +181,146 @@ if (fs.existsSync(path.join(root, 'prepare_src.sh'))) test('source release entry
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /source or credential assets cannot be published/);
   assert.equal((result.stdout + result.stderr).includes(canary), false);
+});
+
+
+test('source tokens use pinned read-only repository scope without a long-lived fallback', () => {
+  let tokenJobs = 0;
+  for (const file of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => name.endsWith('.yml'))) {
+    const source = fs.readFileSync(path.join(root, '.github/workflows', file), 'utf8').replaceAll('\r\n', '\n');
+    assert.doesNotMatch(source, /secrets\.ZHANLU_GITHUB_TOKEN/);
+    const sharedInputs = source.match(/with: &source-read-inputs\n((?:          .+\n)+)/)?.[1];
+    for (const step of source.split(/\n      - /).filter(step => /id: source-token\n/.test(step))) {
+      tokenJobs++;
+      assert.match(step, /uses: actions\/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1\b/);
+      const inputs = step.includes('with: *source-read-inputs') ? sharedInputs : step;
+      assert.ok(inputs);
+      assert.match(inputs, /client-id: \$\{\{ vars\.SOURCE_APP_CLIENT_ID \}\}/);
+      assert.doesNotMatch(inputs, /\bapp-id:/);
+      assert.match(inputs, /permission-contents: read/);
+      assert.match(inputs, /repositories: \$\{\{ vars\.SOURCE_APP_REPOSITORIES \|\| '__missing_source_repository_configuration__' \}\}/);
+      assert.match(inputs, /private-key: \$\{\{ secrets\.SOURCE_APP_PRIVATE_KEY \}\}/);
+      assert.doesNotMatch(inputs, /permission-[\w-]+: write/);
+    }
+  }
+  assert.ok(tokenJobs > 0);
+});
+
+test('release Git authentication prefers the portal push token and preserves API credentials', () => {
+  for (const portal of [true, false]) {
+    const cwd = temporary();
+    fs.cpSync(path.join(root, 'scripts'), path.join(cwd, 'scripts'), { recursive: true });
+    fs.copyFileSync(path.join(root, 'create-release.sh'), path.join(cwd, 'create-release.sh'));
+    fs.writeFileSync(path.join(cwd, 'utils.sh'), `
+credential="$(printf 'protocol=https\\nhost=github.com\\n\\n' | secure_git credential fill)"
+[[ "$credential" == *"password=$EXPECTED_GIT_TOKEN"* ]] || exit 21
+[[ "$GH_TOKEN" == "$EXPECTED_API_TOKEN" ]] || exit 22
+exit 0
+`);
+    const apiToken = 'fake-api-token';
+    const result = run('bash', ['-x', 'create-release.sh'], { cwd, env: {
+      GITHUB_GIT_TOKEN: portal ? canary : '', GH_TOKEN: apiToken, GITHUB_TOKEN: 'fake-workflow-token',
+      EXPECTED_GIT_TOKEN: portal ? canary : apiToken, EXPECTED_API_TOKEN: apiToken,
+      HOME: cwd, XDG_CONFIG_HOME: cwd,
+    } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((result.stdout + result.stderr).includes(canary), false);
+    assert.equal((result.stdout + result.stderr).includes(apiToken), false);
+    assert.equal(fs.existsSync(path.join(cwd, '.git-credentials')), false);
+  }
+});
+
+
+test('archive preflight rejects nested npm credentials without echoing their values', () => {
+  const cwd = temporary();
+  const nested = path.join(cwd, 'vscode/.build/extensions/node_modules/pkg');
+  fs.mkdirSync(nested, { recursive: true });
+  const env = { SOURCE_ARTIFACT_KEY: randomBytes(32).toString('hex') };
+  for (const content of [`//registry.npmjs.org/:_authToken=${canary}`, `registry=https://${canary}@example.test/`, `_password=${canary}`]) {
+    fs.writeFileSync(path.join(nested, '.npmrc'), content);
+    const result = run(process.execPath, [path.join(root, 'scripts/source-artifact.mjs'), 'check', 'vscode'], { cwd, env });
+    assert.notEqual(result.status, 0);
+    assert.equal((result.stdout + result.stderr).includes(canary), false);
+  }
+});
+
+
+test('Windows toolchain setup waits for installation and rejects unsuccessful or incomplete installs', { skip: process.platform !== 'win32' }, () => {
+  for (const workflow of ['stable-windows.yml', 'insider-windows.yml']) {
+    const contents = fs.readFileSync(path.join(root, '.github/workflows', workflow), 'utf8').replaceAll('\r\n', '\n');
+    const step = contents.split('      - name: Install Visual Studio 2022 C++ build tools\n')[1].split('      # zhanlu_change end')[0];
+    const setup = step.split('        run: |\n')[1].replace(/^          /gm, '');
+    for (const [exitCode, complete, success] of [[0, true, true], [3010, true, true], [1, true, false], [0, false, false]]) {
+      const cwd = temporary();
+      const output = path.join(cwd, 'github-env');
+      const fixture = `
+$env:GITHUB_ENV = '${output.replaceAll("'", "''")}'
+$script:installationCompleted = $false
+function Test-Path { param($Path) return ($script:installationCompleted -and $${complete}) }
+function Invoke-WebRequest { param($Uri, $OutFile) }
+function Start-Process {
+  param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru)
+  if (-not $Wait -or -not $PassThru -or '--wait' -notin $ArgumentList) { throw 'Installer was not awaited' }
+  $script:installationCompleted = $true
+  return [pscustomobject]@{ ExitCode = ${exitCode} }
+}
+${setup}
+`;
+      fs.writeFileSync(path.join(cwd, 'setup.ps1'), fixture);
+      const result = run('pwsh', ['-NoProfile', '-File', path.join(cwd, 'setup.ps1')], { cwd });
+      assert.equal(result.status === 0, success, result.stdout + result.stderr);
+      assert.equal(fs.existsSync(output), success);
+      if (success) assert.match(fs.readFileSync(output, 'utf8'), /vs2022_install=.*BuildTools/);
+    }
+  }
+});
+
+test('delivery artifact preserves nested runtime configuration only inside authenticated ciphertext', () => {
+  const { cwd, env, invoke } = cryptoFixture();
+  fs.mkdirSync(path.join(cwd, 'assets/nested'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'assets/nested/.env'), `RUNTIME_TOKEN=${canary}\n`);
+  fs.writeFileSync(path.join(cwd, 'assets/Product with spaces.zip'), 'fake-product-archive');
+  const result = run('bash', [path.join(root, 'scripts/protect-delivery-artifact.sh')], { cwd, env });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const ciphertext = fs.readFileSync(path.join(cwd, 'delivery-assets.tar.enc'));
+  assert.equal(ciphertext.subarray(0, 8).toString(), 'SRCENC01');
+  assert.equal(ciphertext.includes(Buffer.from(canary)), false);
+  assert.equal(invoke('decrypt', 'delivery-assets.tar.enc', 'assets.tar').status, 0);
+  fs.mkdirSync(path.join(cwd, 'restored-assets'));
+  assert.equal(run('tar', ['-xf', 'assets.tar', '-C', 'restored-assets'], { cwd }).status, 0);
+  assert.equal(fs.readFileSync(path.join(cwd, 'restored-assets/nested/.env'), 'utf8'), `RUNTIME_TOKEN=${canary}\n`);
+  assert.equal(fs.readFileSync(path.join(cwd, 'restored-assets/Product with spaces.zip'), 'utf8'), 'fake-product-archive');
+  const rejected = run('bash', [path.join(root, 'scripts/protect-delivery-artifact.sh')], { cwd, env: { ...env, SOURCE_ARTIFACT_KEY: '' } });
+  assert.notEqual(rejected.status, 0);
+  assert.equal(fs.existsSync(path.join(cwd, 'delivery-assets.tar.enc')), false);
+  assert.equal((result.stdout + result.stderr + rejected.stdout + rejected.stderr).includes(canary), false);
+});
+
+test('draft release delivery never duplicates plaintext assets into workflow artifacts', () => {
+  for (const name of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => /^(stable|insider)-(linux|macos|windows)\.yml$/.test(name))) {
+    const workflow = fs.readFileSync(path.join(root, '.github/workflows', name), 'utf8').replaceAll('\r\n', '\n');
+    const blocks = workflow.split(/(?=      - name: Encrypt delivery artifact)/).slice(1);
+    assert.ok(blocks.length > 0, name);
+    for (const section of blocks) {
+      const block = section.split(/\n(?:  [\w-]+:|      - name: (?!Upload assets))/)[0];
+      assert.match(block, /run: bash scripts\/protect-delivery-artifact.sh/);
+      assert.match(block, /path: delivery-assets\.tar\.enc/);
+      assert.match(block, /if-no-files-found: error/);
+      const conditions = [...block.matchAll(/^        if: (.+?)(?: #.*)?$/gm)].map(match => match[1]);
+      assert.equal(conditions.length, 2, name);
+      assert.equal(conditions[0], conditions[1]);
+      const evaluate = (deploy, generate) => Function('env', 'github', `return ${conditions[0]}`)(
+        { SHOULD_DEPLOY: deploy, SHOULD_BUILD: 'yes', DISABLED: 'no' }, { event: { inputs: { generate_assets: generate } } });
+      assert.equal(evaluate('yes', 'true'), false, 'release files stay in release even if generate is also selected');
+      assert.equal(evaluate('no', 'false'), false);
+      assert.equal(evaluate('no', 'true'), true);
+    }
+    assert.doesNotMatch(workflow, /path: assets\//);
+    if (name.endsWith('windows.yml')) {
+      const guard = workflow.split('      - name: Require private signing artifacts\n')[1].split('      # zhanlu_change end')[0];
+      const script = guard.split('        run: |\n')[1].split('        if:')[0].replace(/^          /gm, '');
+      assert.notEqual(run('bash', ['-c', script], { env: { REPOSITORY_IS_PRIVATE: 'false' } }).status, 0);
+      assert.equal(run('bash', ['-c', script], { env: { REPOSITORY_IS_PRIVATE: 'true' } }).status, 0);
+    }
+  }
 });
