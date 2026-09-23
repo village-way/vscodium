@@ -7,7 +7,7 @@ set -e
 
 # zhanlu_change start - checkout does not persist credentials; authenticate each network operation
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/secure-git.sh"
-export ZHANLU_GITHUB_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-${ZHANLU_GITHUB_TOKEN:-}}}"
+export ZHANLU_GITHUB_TOKEN="${GITHUB_GIT_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-${ZHANLU_GITHUB_TOKEN:-}}}}"
 # zhanlu_change end
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -55,11 +55,23 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: &source-read-inputs
+          client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
+          permission-contents: read
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh # zhanlu_change - build scripts live in zhanlu-code
 
       - name: Switch to relevant branch
@@ -69,6 +81,8 @@ jobs:
         run: ./get_pr.sh
 
       - name: Clone VSCode repo
+        env:
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - private fetch uses the scoped token
         run: ./get_repo.sh
 
       - name: Check PR or cron
@@ -102,11 +116,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.SHOULD_BUILD == 'yes'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh # zhanlu_change - build scripts live in zhanlu-code
         if: env.SHOULD_BUILD == 'yes'
 
@@ -143,6 +165,8 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Clone VSCode repo
+        env:
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - private fetch uses the scoped token
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -163,9 +187,7 @@ jobs:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -175,6 +197,7 @@ jobs:
 
       - name: Build
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - authenticate public dependency downloads
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
           # zhanlu_change start - allow CI secrets to configure Zhanlu product endpoints
@@ -195,11 +218,13 @@ jobs:
         env:
           SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }} # zhanlu_change
         run: |
-          node scripts/source-artifact.mjs check
+          node scripts/source-artifact.mjs check vscode vscode-certificates.txt
           find vscode -type f -not -path "*/node_modules/*" -not -path "vscode/.build/node/*" -not -path "vscode/.git/*" > vscode.txt
           echo "vscode/.build/extensions/node_modules" >> vscode.txt
           # zhanlu_change - exclude local metadata and credentials even inside encrypted intermediates
-          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.npmrc' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -czf vscode.tar.gz -T vscode.txt
+          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -cf vscode.tar -T vscode.txt
+          tar --null -rf vscode.tar -T vscode-certificates.txt
+          gzip vscode.tar
           node scripts/source-artifact.mjs encrypt vscode.tar.gz vscode.tar.gz.enc
           rm vscode.tar.gz
         if: env.SHOULD_BUILD == 'yes'
@@ -271,11 +296,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh # zhanlu_change - packaging scripts live in zhanlu-code
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
@@ -335,9 +368,7 @@ jobs:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_zhanlu.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
@@ -370,13 +401,22 @@ jobs:
         run: ./update_version.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'yes'
 
+      # zhanlu_change start - protect workflow-only delivery without altering install packages
+      - name: Encrypt delivery artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: bash scripts/protect-delivery-artifact.sh
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+      # zhanlu_change end
+
       - name: Upload assets
         uses: actions/upload-artifact@v5
         with:
           name: bin-${{ matrix.vscode_arch }}
-          path: assets/
+          path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
           retention-days: 3
-        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+          if-no-files-found: error # zhanlu_change - reject missing ciphertext
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true' # zhanlu_change - release assets stay in the release only
 
   reh_linux:
     needs:
@@ -428,11 +468,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.DISABLED != 'yes'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh # zhanlu_change - packaging scripts live in zhanlu-code
         if: env.DISABLED != 'yes'
 
@@ -494,7 +542,7 @@ jobs:
         env:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
           ZHANLU_CLI_ONLY: 'yes'
         run: ./get_zhanlu.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -527,13 +575,22 @@ jobs:
         run: ./release.sh
         if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no')
 
+      # zhanlu_change start - protect workflow-only delivery without altering install packages
+      - name: Encrypt delivery artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: bash scripts/protect-delivery-artifact.sh
+        if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+      # zhanlu_change end
+
       - name: Upload assets
         uses: actions/upload-artifact@v5
         with:
           name: reh-linux-${{ matrix.vscode_arch }}
-          path: assets/
+          path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
           retention-days: 3
-        if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+          if-no-files-found: error # zhanlu_change - reject missing ciphertext
+        if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true' # zhanlu_change - release assets stay in the release only
 
   reh_alpine:
     needs:
@@ -568,11 +625,18 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh # zhanlu_change - packaging scripts live in zhanlu-code
 
       - name: Switch to relevant branch
@@ -623,7 +687,7 @@ jobs:
         env:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
           ZHANLU_CLI_ONLY: 'yes'
         run: ./get_zhanlu.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -656,13 +720,22 @@ jobs:
         run: ./release.sh
         if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no')
 
+      # zhanlu_change start - protect workflow-only delivery without altering install packages
+      - name: Encrypt delivery artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: bash scripts/protect-delivery-artifact.sh
+        if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+      # zhanlu_change end
+
       - name: Upload assets
         uses: actions/upload-artifact@v5
         with:
           name: reh-alpine-${{ matrix.vscode_arch }}
-          path: assets/
+          path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
           retention-days: 3
-        if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+          if-no-files-found: error # zhanlu_change - reject missing ciphertext
+        if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true' # zhanlu_change - release assets stay in the release only
 
   aur:
     needs:
@@ -714,11 +787,18 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh # zhanlu_change - Snap packaging files live in zhanlu-code
 
       - name: Switch to relevant branch

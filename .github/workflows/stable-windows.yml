@@ -105,11 +105,23 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: &source-read-inputs
+          client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
+          permission-contents: read
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
 
       - name: Switch to relevant branch
@@ -122,7 +134,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_repo.sh
 
       - name: Check PR or cron
@@ -160,11 +172,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -210,7 +230,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -231,10 +251,8 @@ jobs:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
@@ -244,6 +262,7 @@ jobs:
 
       - name: Build
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - authenticate public dependency downloads
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
           # zhanlu_change start - allow CI secrets to configure Zhanlu product endpoints
@@ -264,11 +283,13 @@ jobs:
         env:
           SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }} # zhanlu_change
         run: |
-          node scripts/source-artifact.mjs check
+          node scripts/source-artifact.mjs check vscode vscode-certificates.txt
           find vscode -type f -not -path "*/node_modules/*" -not -path "vscode/.build/node/*" -not -path "vscode/.git/*" > vscode.txt
           echo "vscode/.build/extensions/node_modules" >> vscode.txt
           # zhanlu_change - exclude local metadata and credentials even inside encrypted intermediates
-          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.npmrc' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -czf vscode.tar.gz -T vscode.txt
+          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -cf vscode.tar -T vscode.txt
+          tar --null -rf vscode.tar -T vscode-certificates.txt
+          gzip vscode.tar
           node scripts/source-artifact.mjs encrypt vscode.tar.gz vscode.tar.gz.enc
           rm vscode.tar.gz
         if: env.SHOULD_BUILD == 'yes'
@@ -320,11 +341,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -413,10 +442,8 @@ jobs:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
@@ -429,32 +456,38 @@ jobs:
         if: env.SHOULD_BUILD == 'yes' && matrix.vscode_arch == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $existing = @(
             "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise",
             "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools"
-          ) | Where-Object { Test-Path $_ }
+          ) | Where-Object { Test-Path "$_\VC\Auxiliary\Build\vcvarsall.bat" } | Select-Object -First 1
           if ($existing) {
             Write-Host "Visual Studio 2022 already present: $($existing -join ', ')"
+            "vs2022_install=$existing" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
             exit 0
           }
           $installer = Join-Path $env:TEMP "vs_buildtools.exe"
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile $installer
-          & $installer --wait --quiet --norestart --nocache `
-            --add Microsoft.VisualStudio.Workload.VCTools `
-            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
-            --add Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre `
-            --add Microsoft.VisualStudio.Component.VC.ATL.ARM64 `
-            --add Microsoft.VisualStudio.Component.VC.ATL.ARM64.Spectre `
-            --add Microsoft.VisualStudio.Component.Windows11SDK.26100 `
-            --includeRecommended
-          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
-            exit $LASTEXITCODE
-          }
           $installed = "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools"
-          if (-not (Test-Path $installed)) {
-            Write-Error "VS 2022 Build Tools were not installed at $installed"
-            exit 1
+          $arguments = @(
+            '--wait', '--quiet', '--norestart', '--nocache',
+            '--installPath', "`"$installed`"",
+            '--add', 'Microsoft.VisualStudio.Workload.VCTools',
+            '--add', 'Microsoft.VisualStudio.Component.VC.Tools.ARM64',
+            '--add', 'Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre',
+            '--add', 'Microsoft.VisualStudio.Component.VC.ATL.ARM64',
+            '--add', 'Microsoft.VisualStudio.Component.VC.ATL.ARM64.Spectre',
+            '--add', 'Microsoft.VisualStudio.Component.Windows11SDK.26100',
+            '--includeRecommended'
+          )
+          $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 3010)) {
+            throw "VS 2022 installer failed with exit code $($process.ExitCode)"
           }
+          if (-not (Test-Path "$installed\VC\Auxiliary\Build\vcvarsall.bat")) {
+            throw "VS 2022 C++ Build Tools were not installed at $installed"
+          }
+          "vs2022_install=$installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       # zhanlu_change end
 
       - name: Build
@@ -484,6 +517,18 @@ jobs:
       # Signing steps - only run when SignPath secrets are configured
       # To enable signing, configure SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID,
       # SIGNPATH_PROJECT_SLUG, and SIGNPATH_POLICY_SLUG in repository secrets
+      # zhanlu_change start - public signing intermediates bypass draft release access controls
+      - name: Require private signing artifacts
+        env:
+          REPOSITORY_IS_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          if [[ "$REPOSITORY_IS_PRIVATE" != 'true' ]]; then
+            echo 'Signing requires a private artifact repository; public unsigned uploads are forbidden.' >&2
+            exit 1
+          fi
+        if: env.SHOULD_BUILD == 'yes' && (env.SHOULD_DEPLOY == 'yes' || github.event.inputs.generate_assets == 'true') && env.SHOULD_SIGN == 'yes'
+      # zhanlu_change end
+
       - name: Upload unsigned artifacts for signing
         id: upload-unsigned-artifacts
         uses: actions/upload-artifact@v7
@@ -528,14 +573,22 @@ jobs:
         run: ./update_version.sh
         if: false && env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'yes'
 
+      # zhanlu_change start - protect workflow-only delivery without altering install packages
+      - name: Encrypt delivery artifact
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: bash scripts/protect-delivery-artifact.sh
+        if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
+      # zhanlu_change end
+
       - name: Upload assets
         uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.vscode_arch }}
-          path: assets/
+          path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
           retention-days: 3
-        # zhanlu_change - mirror prepare_assets: artifact on release builds too (not only --generate)
-        if: env.SHOULD_BUILD == 'yes' && (env.SHOULD_DEPLOY == 'yes' || github.event.inputs.generate_assets == 'true')
+          if-no-files-found: error # zhanlu_change - reject missing ciphertext
+        if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true' # zhanlu_change - release assets stay in the release only
 
   winget:
     needs: build
@@ -553,11 +606,18 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh # zhanlu_change - WinGet helper scripts live in zhanlu-code
 
       - name: Check version
