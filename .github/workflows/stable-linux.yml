@@ -109,9 +109,9 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: &source-read-inputs
-          app-id: ${{ vars.SOURCE_APP_ID }}
+          client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
           private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
@@ -168,7 +168,7 @@ jobs:
     steps:
       - name: Create source read token
         id: source-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
 
       - name: Checkout source
@@ -244,7 +244,7 @@ jobs:
       - name: Create source read token
         id: source-token
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
@@ -464,7 +464,7 @@ jobs:
       - name: Create source read token
         id: source-token
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
@@ -632,7 +632,7 @@ jobs:
       - name: Create source read token
         id: source-token
         if: env.SHOULD_BUILD == 'yes'
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
 
       - name: Fetch source code from private repository
@@ -751,7 +751,7 @@ jobs:
       - name: Create source read token
         id: source-token
         if: env.DISABLED != 'yes'
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
@@ -905,7 +905,7 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
@@ -1062,7 +1062,7 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 

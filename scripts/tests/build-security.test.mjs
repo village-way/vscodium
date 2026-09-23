@@ -192,9 +192,11 @@ test('source tokens use pinned read-only repository scope without a long-lived f
     const sharedInputs = source.match(/with: &source-read-inputs\n((?:          .+\n)+)/)?.[1];
     for (const step of source.split(/\n      - /).filter(step => /id: source-token\n/.test(step))) {
       tokenJobs++;
-      assert.match(step, /uses: actions\/create-github-app-token@[a-f0-9]{40}\b/);
+      assert.match(step, /uses: actions\/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1\b/);
       const inputs = step.includes('with: *source-read-inputs') ? sharedInputs : step;
       assert.ok(inputs);
+      assert.match(inputs, /client-id: \$\{\{ vars\.SOURCE_APP_CLIENT_ID \}\}/);
+      assert.doesNotMatch(inputs, /\bapp-id:/);
       assert.match(inputs, /permission-contents: read/);
       assert.match(inputs, /repositories: \$\{\{ vars\.SOURCE_APP_REPOSITORIES \|\| '__missing_source_repository_configuration__' \}\}/);
       assert.match(inputs, /private-key: \$\{\{ secrets\.SOURCE_APP_PRIVATE_KEY \}\}/);
@@ -239,5 +241,36 @@ test('archive preflight rejects nested npm credentials without echoing their val
     const result = run(process.execPath, [path.join(root, 'scripts/source-artifact.mjs'), 'check', 'vscode'], { cwd, env });
     assert.notEqual(result.status, 0);
     assert.equal((result.stdout + result.stderr).includes(canary), false);
+  }
+});
+
+
+test('Windows toolchain setup waits for installation and rejects unsuccessful or incomplete installs', { skip: process.platform !== 'win32' }, () => {
+  for (const workflow of ['stable-windows.yml', 'insider-windows.yml']) {
+    const contents = fs.readFileSync(path.join(root, '.github/workflows', workflow), 'utf8').replaceAll('\r\n', '\n');
+    const step = contents.split('      - name: Install Visual Studio 2022 C++ build tools\n')[1].split('      # zhanlu_change end')[0];
+    const setup = step.split('        run: |\n')[1].replace(/^          /gm, '');
+    for (const [exitCode, complete, success] of [[0, true, true], [3010, true, true], [1, true, false], [0, false, false]]) {
+      const cwd = temporary();
+      const output = path.join(cwd, 'github-env');
+      const fixture = `
+$env:GITHUB_ENV = '${output.replaceAll("'", "''")}'
+$script:installed = $false
+function Test-Path { param($Path) return ($script:installed -and $${complete}) }
+function Invoke-WebRequest { param($Uri, $OutFile) }
+function Start-Process {
+  param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru)
+  if (-not $Wait -or -not $PassThru -or '--wait' -notin $ArgumentList) { throw 'Installer was not awaited' }
+  $script:installed = $true
+  return [pscustomobject]@{ ExitCode = ${exitCode} }
+}
+${setup}
+`;
+      fs.writeFileSync(path.join(cwd, 'setup.ps1'), fixture);
+      const result = run('pwsh', ['-NoProfile', '-File', path.join(cwd, 'setup.ps1')], { cwd });
+      assert.equal(result.status === 0, success, result.stdout + result.stderr);
+      assert.equal(fs.existsSync(output), success);
+      if (success) assert.match(fs.readFileSync(output, 'utf8'), /vs2022_install=.*BuildTools/);
+    }
   }
 });
