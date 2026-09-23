@@ -1,5 +1,7 @@
 // zhanlu_change - new file
-/* Exercise credential isolation, authenticated archives and workflow publication boundaries. */
+/*
+ * Exercise credential isolation, authenticated archives and workflow publication boundaries.
+ */
 
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -115,6 +117,9 @@ test('real archive recipe excludes nested credentials and Git metadata', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/stable-linux.yml'), 'utf8').replaceAll('\r\n', '\n');
   const block = workflow.split('      - name: Compress vscode artifact\n')[1].split('\n      - name:')[0];
   const script = block.split('        run: |\n')[1].split('\n        if:')[0].replace(/^          /gm, '').replaceAll('scripts/source-artifact.mjs', JSON.stringify(path.join(root, 'scripts/source-artifact.mjs').replaceAll('\\', '/')));
+  fs.writeFileSync(path.join(cwd, 'vscode/.npmrc'), 'target=42.4.1\nruntime=electron\n');
+  fs.mkdirSync(path.join(cwd, 'vscode/remote'));
+  fs.writeFileSync(path.join(cwd, 'vscode/remote/.npmrc'), 'target=24.15.0\nruntime=node\n');
   const env = { SOURCE_ARTIFACT_KEY: randomBytes(32).toString('hex') };
   const result = run('bash', ['-ec', script], { cwd, env });
   assert.equal(result.status, 0, result.stderr);
@@ -124,6 +129,9 @@ test('real archive recipe excludes nested credentials and Git metadata', () => {
   assert.equal(listing.status, 0);
   assert.match(listing.stdout, /src\/source.ts/);
   assert.doesNotMatch(listing.stdout, /\.git\/|\.env/);
+  assert.match(listing.stdout, /vscode\/\.npmrc/);
+  assert.match(listing.stdout, /vscode\/remote\/\.npmrc/);
+  assert.equal(run('tar', ['-xOzf', 'restored.tar.gz', 'vscode/remote/.npmrc'], { cwd }).stdout, 'target=24.15.0\nruntime=node\n');
 });
 
 test('failed fetch scrubs legacy remotes without writing or logging the canary token', () => {
@@ -164,4 +172,63 @@ if (fs.existsSync(path.join(root, 'prepare_src.sh'))) test('source release entry
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /source or credential assets cannot be published/);
   assert.equal((result.stdout + result.stderr).includes(canary), false);
+});
+
+
+test('source tokens use pinned read-only repository scope without a long-lived fallback', () => {
+  let tokenJobs = 0;
+  for (const file of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => name.endsWith('.yml'))) {
+    const source = fs.readFileSync(path.join(root, '.github/workflows', file), 'utf8').replaceAll('\r\n', '\n');
+    assert.doesNotMatch(source, /secrets\.ZHANLU_GITHUB_TOKEN/);
+    const sharedInputs = source.match(/with: &source-read-inputs\n((?:          .+\n)+)/)?.[1];
+    for (const step of source.split(/\n      - /).filter(step => /id: source-token\n/.test(step))) {
+      tokenJobs++;
+      assert.match(step, /uses: actions\/create-github-app-token@[a-f0-9]{40}\b/);
+      const inputs = step.includes('with: *source-read-inputs') ? sharedInputs : step;
+      assert.ok(inputs);
+      assert.match(inputs, /permission-contents: read/);
+      assert.match(inputs, /repositories: \$\{\{ vars\.SOURCE_APP_REPOSITORIES \|\| '__missing_source_repository_configuration__' \}\}/);
+      assert.match(inputs, /private-key: \$\{\{ secrets\.SOURCE_APP_PRIVATE_KEY \}\}/);
+      assert.doesNotMatch(inputs, /permission-[\w-]+: write/);
+    }
+  }
+  assert.ok(tokenJobs > 0);
+});
+
+test('release Git authentication prefers the portal push token and preserves API credentials', () => {
+  for (const portal of [true, false]) {
+    const cwd = temporary();
+    fs.cpSync(path.join(root, 'scripts'), path.join(cwd, 'scripts'), { recursive: true });
+    fs.copyFileSync(path.join(root, 'create-release.sh'), path.join(cwd, 'create-release.sh'));
+    fs.writeFileSync(path.join(cwd, 'utils.sh'), `
+credential="$(printf 'protocol=https\\nhost=github.com\\n\\n' | secure_git credential fill)"
+[[ "$credential" == *"password=$EXPECTED_GIT_TOKEN"* ]] || exit 21
+[[ "$GH_TOKEN" == "$EXPECTED_API_TOKEN" ]] || exit 22
+exit 0
+`);
+    const apiToken = 'fake-api-token';
+    const result = run('bash', ['-x', 'create-release.sh'], { cwd, env: {
+      GITHUB_GIT_TOKEN: portal ? canary : '', GH_TOKEN: apiToken, GITHUB_TOKEN: 'fake-workflow-token',
+      EXPECTED_GIT_TOKEN: portal ? canary : apiToken, EXPECTED_API_TOKEN: apiToken,
+      HOME: cwd, XDG_CONFIG_HOME: cwd,
+    } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((result.stdout + result.stderr).includes(canary), false);
+    assert.equal((result.stdout + result.stderr).includes(apiToken), false);
+    assert.equal(fs.existsSync(path.join(cwd, '.git-credentials')), false);
+  }
+});
+
+
+test('archive preflight rejects nested npm credentials without echoing their values', () => {
+  const cwd = temporary();
+  const nested = path.join(cwd, 'vscode/.build/extensions/node_modules/pkg');
+  fs.mkdirSync(nested, { recursive: true });
+  const env = { SOURCE_ARTIFACT_KEY: randomBytes(32).toString('hex') };
+  for (const content of [`//registry.npmjs.org/:_authToken=${canary}`, `registry=https://${canary}@example.test/`, `_password=${canary}`]) {
+    fs.writeFileSync(path.join(nested, '.npmrc'), content);
+    const result = run(process.execPath, [path.join(root, 'scripts/source-artifact.mjs'), 'check', 'vscode'], { cwd, env });
+    assert.notEqual(result.status, 0);
+    assert.equal((result.stdout + result.stderr).includes(canary), false);
+  }
 });

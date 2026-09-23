@@ -1,17 +1,47 @@
 // zhanlu_change - new file
-/* Encrypt cross-job source archives and authenticate them before exposing plaintext. */
+/*
+ * Encrypt cross-job source archives and authenticate them before exposing plaintext.
+ */
 
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { appendFile, open, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, open, rename, rm, stat, writeFile, readdir, readFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
+import path from 'node:path';
 
 const magic = Buffer.from('SRCENC01');
+// Preserve native build settings while rejecting credentials before archiving.
+async function checkNpmConfigs(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.name === '.git') continue;
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) await checkNpmConfigs(file);
+    else if (entry.name === '.npmrc') {
+      if (!entry.isFile()) throw new Error('Linked npm configuration is forbidden');
+      for (const line of (await readFile(file, 'utf8')).split(/\r?\n/)) {
+        if (/^\s*(?:[;#]|$)/.test(line)) continue;
+        const separator = line.indexOf('=');
+        if (separator < 0) throw new Error('Invalid npm configuration');
+        const key = line.slice(0, separator).trim();
+        const value = line.slice(separator + 1).trim();
+        if (/(?:auth|token|password|username|cert|keyfile)/i.test(key)
+            || /https?:\/\/[^/\s]*@/i.test(value)
+            || /[?&](?:token|key|api[_-]?key|password)=/i.test(value)) {
+          throw new Error('Credential-bearing npm configuration is forbidden');
+        }
+      }
+    }
+  }
+}
+
 async function main() {
   const [mode, input, output] = process.argv.slice(2);
   const secret = process.env.SOURCE_ARTIFACT_KEY || '';
   if (!/^[a-fA-F0-9]{64}$/.test(secret)) throw new Error('SOURCE_ARTIFACT_KEY must be a random 32-byte hex secret');
-  if (mode === 'check') return;
+  if (mode === 'check') {
+    if (input) await checkNpmConfigs(input);
+    return;
+  }
   if (!['encrypt', 'decrypt'].includes(mode) || !input || !output || input === output) throw new Error('Invalid archive operation');
   const context = `${process.env.GITHUB_REPOSITORY || 'local'}:${process.env.GITHUB_RUN_ID || 'local'}`;
   const temporary = `${output}.${randomUUID()}.partial`;

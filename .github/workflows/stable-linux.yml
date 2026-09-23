@@ -106,11 +106,23 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: &source-read-inputs
+          app-id: ${{ vars.SOURCE_APP_ID }}
+          private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
+          permission-contents: read
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
 
       - name: Switch to relevant branch
@@ -123,7 +135,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_repo.sh
 
       - name: Check PR or cron
@@ -154,13 +166,18 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: *source-read-inputs
+
       - name: Checkout source
         uses: actions/checkout@v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           repository: ${{ vars.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_COMMIT || env.ZHANLU_CODE_SOURCE_BRANCH }}
-          token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          token: ${{ steps.source-token.outputs.token }}
           path: zhanlu-code-source
 
       - name: Checkout the legacy extension
@@ -169,7 +186,7 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           repository: ${{ vars.LEGACY_EXT_REPOSITORY }}
           ref: ${{ env.ZHANLU_VS_REF || 'develop' }}
-          token: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          token: ${{ steps.source-token.outputs.token }}
           path: zhanlu-vs-bridge
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -223,11 +240,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -275,7 +300,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -312,10 +337,8 @@ jobs:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_zhanlu.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
@@ -345,11 +368,11 @@ jobs:
         env:
           SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }} # zhanlu_change
         run: |
-          node scripts/source-artifact.mjs check
+          node scripts/source-artifact.mjs check vscode
           find vscode -type f -not -path "*/node_modules/*" -not -path "vscode/.build/node/*" -not -path "vscode/.git/*" > vscode.txt
           echo "vscode/.build/extensions/node_modules" >> vscode.txt
           # zhanlu_change - exclude local metadata and credentials even inside encrypted intermediates
-          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.npmrc' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -czf vscode.tar.gz -T vscode.txt
+          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -czf vscode.tar.gz -T vscode.txt
           node scripts/source-artifact.mjs encrypt vscode.tar.gz vscode.tar.gz.enc
           rm vscode.tar.gz
         if: env.SHOULD_BUILD == 'yes'
@@ -434,11 +457,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
@@ -522,10 +553,8 @@ jobs:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           # IMPORTANT: GITHUB_TOKEN can only access the current repository.
           # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          # Create a PAT with 'repo' scope and store it in GitHub Secrets as ZHANLU_GITHUB_TOKEN.
-          # Then update this line to: ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }} # zhanlu_change
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_zhanlu.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
 
@@ -597,11 +626,17 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.SHOULD_BUILD == 'yes'
 
+      - name: Create source read token
+        id: source-token
+        if: env.SHOULD_BUILD == 'yes'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: *source-read-inputs
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -610,7 +645,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'
       # zhanlu_change end
@@ -635,7 +670,7 @@ jobs:
         env:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
         run: bash ./prepare_zhanlu_cli_assets.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -709,11 +744,19 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes'
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        if: env.DISABLED != 'yes'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.DISABLED != 'yes'
 
@@ -792,7 +835,7 @@ jobs:
         env:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
           ZHANLU_CLI_ONLY: 'yes'
         run: ./get_zhanlu.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -856,11 +899,18 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
 
       - name: Switch to relevant branch
@@ -928,7 +978,7 @@ jobs:
         env:
           ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
           ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
           ZHANLU_CLI_ONLY: 'yes'
         run: ./get_zhanlu.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -1006,11 +1056,18 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
 
+      # zhanlu_change start - short-lived source credentials with explicit read-only scope
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with: *source-read-inputs
+      # zhanlu_change end
+
       - name: Fetch source code from private repository
         env:
           SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.ZHANLU_GITHUB_TOKEN }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
 
       - name: Switch to relevant branch
