@@ -255,13 +255,13 @@ test('Windows toolchain setup waits for installation and rejects unsuccessful or
       const output = path.join(cwd, 'github-env');
       const fixture = `
 $env:GITHUB_ENV = '${output.replaceAll("'", "''")}'
-$script:installed = $false
-function Test-Path { param($Path) return ($script:installed -and $${complete}) }
+$script:installationCompleted = $false
+function Test-Path { param($Path) return ($script:installationCompleted -and $${complete}) }
 function Invoke-WebRequest { param($Uri, $OutFile) }
 function Start-Process {
   param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru)
   if (-not $Wait -or -not $PassThru -or '--wait' -notin $ArgumentList) { throw 'Installer was not awaited' }
-  $script:installed = $true
+  $script:installationCompleted = $true
   return [pscustomobject]@{ ExitCode = ${exitCode} }
 }
 ${setup}
