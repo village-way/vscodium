@@ -23,7 +23,7 @@ async function checkNpmConfigs(directory, certificates) {
       if (blocks.length && !contents.replace(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g, '').trim()) {
         try {
           for (const block of blocks) new X509Certificate(block);
-          certificates.push(file);
+          certificates.push(file.split(path.sep).join('/'));
         } catch { /* Invalid PEM stays excluded from the archive. */ }
       }
     } else if (entry.name === '.npmrc') {
