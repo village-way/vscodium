@@ -5,6 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { rootCertificates } from 'node:tls';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -120,6 +121,10 @@ test('real archive recipe excludes nested credentials and Git metadata', () => {
   fs.writeFileSync(path.join(cwd, 'vscode/.npmrc'), 'target=42.4.1\nruntime=electron\n');
   fs.mkdirSync(path.join(cwd, 'vscode/remote'));
   fs.writeFileSync(path.join(cwd, 'vscode/remote/.npmrc'), 'target=24.15.0\nruntime=node\n');
+  fs.writeFileSync(path.join(cwd, 'vscode/public-ca.pem'), rootCertificates[0]);
+  fs.writeFileSync(path.join(cwd, 'vscode/private.pem'), `-----BEGIN PRIVATE KEY-----\n${canary}\n-----END PRIVATE KEY-----`);
+  fs.writeFileSync(path.join(cwd, 'vscode/mixed.pem'), rootCertificates[0] + canary);
+  fs.writeFileSync(path.join(cwd, 'vscode/.build/extensions/node_modules/pkg/cert.pem'), rootCertificates[0]);
   const env = { SOURCE_ARTIFACT_KEY: randomBytes(32).toString('hex') };
   const result = run('bash', ['-ec', script], { cwd, env });
   assert.equal(result.status, 0, result.stderr);
@@ -131,6 +136,10 @@ test('real archive recipe excludes nested credentials and Git metadata', () => {
   assert.doesNotMatch(listing.stdout, /\.git\/|\.env/);
   assert.match(listing.stdout, /vscode\/\.npmrc/);
   assert.match(listing.stdout, /vscode\/remote\/\.npmrc/);
+  assert.match(listing.stdout, /vscode\/public-ca\.pem/);
+  assert.match(listing.stdout, /node_modules\/pkg\/cert\.pem/);
+  assert.doesNotMatch(listing.stdout, /private\.pem|mixed\.pem/);
+  assert.equal(run('tar', ['-xOzf', 'restored.tar.gz', 'vscode/public-ca.pem'], { cwd }).stdout, rootCertificates[0]);
   assert.equal(run('tar', ['-xOzf', 'restored.tar.gz', 'vscode/remote/.npmrc'], { cwd }).stdout, 'target=24.15.0\nruntime=node\n');
 });
 

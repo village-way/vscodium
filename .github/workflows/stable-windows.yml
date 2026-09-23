@@ -262,6 +262,7 @@ jobs:
 
       - name: Build
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - authenticate public dependency downloads
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
           # zhanlu_change start - allow CI secrets to configure Zhanlu product endpoints
@@ -282,11 +283,13 @@ jobs:
         env:
           SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }} # zhanlu_change
         run: |
-          node scripts/source-artifact.mjs check vscode
+          node scripts/source-artifact.mjs check vscode vscode-certificates.txt
           find vscode -type f -not -path "*/node_modules/*" -not -path "vscode/.build/node/*" -not -path "vscode/.git/*" > vscode.txt
           echo "vscode/.build/extensions/node_modules" >> vscode.txt
           # zhanlu_change - exclude local metadata and credentials even inside encrypted intermediates
-          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -czf vscode.tar.gz -T vscode.txt
+          tar --exclude='.git' --exclude='.env' --exclude='.env.*' --exclude='.git-credentials' --exclude='*.pem' --exclude='*.key' -cf vscode.tar -T vscode.txt
+          tar --null -rf vscode.tar -T vscode-certificates.txt
+          gzip vscode.tar
           node scripts/source-artifact.mjs encrypt vscode.tar.gz vscode.tar.gz.enc
           rm vscode.tar.gz
         if: env.SHOULD_BUILD == 'yes'
