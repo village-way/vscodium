@@ -132,7 +132,6 @@ echo "=== Copying source files ==="
 DIRS_TO_COPY=(
     "build"
     "dev"
-    "docs"
     "delivery-profiles" # zhanlu_change - customer delivery profiles are source-owned build inputs
     "icons"
     "patches"
@@ -162,7 +161,8 @@ FILES_TO_COPY=(
     "create-release.sh"
     "get_pr.sh"
     "get_repo.sh"
-    "get_zhanlu.sh"
+    "build_zhanlu_agent_resources.sh"
+    "get_zhanlu.sh" # zhanlu_change - sourced by older private revisions; skipped with a warning once retired
     "get_zhanlu_remote_exts.sh"
     "write_zhanlu_root_env.sh"
     "prepare_assets.sh"
@@ -190,11 +190,7 @@ FILES_TO_COPY=(
     # zhanlu_change start - setup-node runs after this script, so Node must come from zhanlu-code
     ".nvmrc"
     # zhanlu_change end
-    "BRANDING_GUIDE.md"
-    "FIX_BUILD_ERROR.md"
     "FUNDING.json"
-    "VSCODE_TECH_ANALYSIS.md"
-    "ZHANLU_INTEGRATION_README.md"
 )
 
 # 复制文件
