@@ -37,6 +37,11 @@ env:
   VSCODE_QUALITY: insider
   ZHANLU_CODE_SOURCE_BRANCH: develop # zhanlu_change - wrapper workflow fetches zhanlu-code before source-owned scripts
 
+# zhanlu_change start - the default token only reads this repository; releases use a scoped PAT
+permissions:
+  contents: read
+# zhanlu_change end
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -48,7 +53,7 @@ jobs:
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -112,7 +117,7 @@ jobs:
       BUILD_SOURCEVERSION: ${{ env.BUILD_SOURCEVERSION }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -147,23 +152,19 @@ jobs:
       #     platform: x64
 
       - name: Setup Node.js environment
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Setup Python 3
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Install pnpm
-        run: npm install -g pnpm
-        if: env.SHOULD_BUILD == 'yes'
-
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.14'
         if: env.SHOULD_BUILD == 'yes'
@@ -185,19 +186,17 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for the legacy extension
+      - name: Write root .env for the Agent resource build
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build the legacy extension
+      - name: Build native Agent resources
         env:
-          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
+          ZHANLU_SKIP_AGENT_TYPECHECK: '1' # zhanlu_change - the type check emits no packaged output
           ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Get Open Remote SSH / WSL builtin extensions
@@ -239,7 +238,7 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Upload vscode artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vscode
           path: ./vscode.tar.gz.enc # zhanlu_change - ciphertext only
@@ -253,7 +252,8 @@ jobs:
       - compile
     strategy:
       fail-fast: false
-      # zhanlu_change start - ARM64 job uses windows-11-arm so get_zhanlu.sh compiles @kilocode/cli-windows-arm64 natively (x64 runner cross-compile fails on Bun toolchain extract)
+      # zhanlu_change start - the ARM64 job runs on windows-11-arm so the native Agent CLI for
+      # win32-arm64 compiles natively; cross-compiling it on an x64 runner fails in Bun's toolchain extract
       matrix:
         include:
           - vscode_arch: x64
@@ -278,7 +278,7 @@ jobs:
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -308,36 +308,32 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Setup Node.js environment
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Setup Python 3
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Install pnpm
-        run: npm install -g pnpm
-        if: env.SHOULD_BUILD == 'yes'
-
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.14'
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Check existing VSCodium tags/releases
         env:
-          DISABLE_MSI: ${{ vars.DISABLE_INSIDER_MSI }}
+          ENABLE_MSI: ${{ vars.ENABLE_INSIDER_MSI }} # zhanlu_change - WiX packages are opt-in
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./check_tags.sh
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Download vscode artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode
         if: env.SHOULD_BUILD == 'yes'
@@ -349,20 +345,28 @@ jobs:
         run: node scripts/source-artifact.mjs decrypt vscode.tar.gz.enc vscode.tar.gz
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for the legacy extension
+      - name: Write root .env for the Agent resource build
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build the legacy extension
-        env:
-          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
-        run: ./get_zhanlu.sh
+      - name: Restore Agent source from the core artifact
+        shell: bash
+        run: |
+          ./scripts/restore-zhanlu-agent-source.sh
+          # agent-web esbuild imports host modules from vscode/src; restore only unpacks zhanlu-agent.
+          tar -xzf vscode.tar.gz vscode/src
         if: env.SHOULD_BUILD == 'yes'
+
+      # zhanlu_change start - the restored compile artifact already holds the arch-independent bundles
+      - name: Refresh Agent resources for the target architecture
+        env:
+          ZHANLU_AGENT_RESOURCES_PREBUILT: 'yes'
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+        run: ./build_zhanlu_agent_resources.sh
+        if: env.SHOULD_BUILD == 'yes'
+      # zhanlu_change end
 
       # zhanlu_change start - windows-11-arm now ships VS 2026; preinstall and node-gyp 11 only accept VS 2022
       - name: Install Visual Studio 2022 C++ build tools
@@ -429,17 +433,16 @@ jobs:
 
       - name: Upload unsigned artifacts
         id: upload-unsigned-artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: unsigned-${{ matrix.vscode_arch }}
           path: |
             assets/*.exe
-            assets/*.msi
           retention-days: 1
         if: env.SHOULD_BUILD == 'yes' && vars.DISABLE_INSIDER_WINDOWS_SIGNING != 'yes' && (env.SHOULD_DEPLOY == 'yes' || github.event.inputs.generate_assets == 'true')
 
       - name: Signing
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
@@ -481,7 +484,7 @@ jobs:
       # zhanlu_change end
 
       - name: Upload assets
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bin-${{ matrix.vscode_arch }}
           path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
@@ -489,49 +492,6 @@ jobs:
           if-no-files-found: error # zhanlu_change - reject missing ciphertext
         if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true' # zhanlu_change - release assets stay in the release only
 
-  winget:
-    needs: build
-    runs-on: windows-2022
-    defaults:
-      run:
-        shell: bash
-    env:
-      APP_IDENTIFIER: Ecloud.Zhanlu.Insiders # zhanlu_change - publish Insider under its own winget id
-      ASSETS_REPOSITORY: ${{ github.repository }}-insiders # zhanlu_change - use this repo's Insider release assets
-    if: needs.build.outputs.SHOULD_DEPLOY == 'yes'
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false # zhanlu_change - no tokens in Git configuration
-          ref: ${{ env.GITHUB_BRANCH }}
-
-      # zhanlu_change start - short-lived source credentials with explicit read-only scope
-      - name: Create source read token
-        id: source-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
-        with: *source-read-inputs
-      # zhanlu_change end
-
-      - name: Fetch source code from private repository
-        env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
-          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
-        run: ./fetch_source.sh # zhanlu_change - WinGet helper scripts live in zhanlu-code
-
-      - name: Check version
-        run: ./stores/winget/check_version.sh
-        env:
-          RELEASE_VERSION: ${{ needs.build.outputs.RELEASE_VERSION }}
-
-      - name: Release to WinGet
-        uses: vedantmgoyal9/winget-releaser@main
-        with:
-          identifier: ${{ env.APP_IDENTIFIER }}
-          version: ${{ env.RELEASE_VERSION }}
-          release-repository: ${{ env.ASSETS_REPOSITORY }}
-          release-tag: ${{ env.RELEASE_VERSION }}-insider
-          installers-regex: '\.exe$' # only .exe files
-          token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-        if: env.SHOULD_DEPLOY == 'yes'
+  # zhanlu_change start - upstream also publishes to WinGet from this workflow; this fork distributes the
+  # signed installers through its own channels, so that job is not carried here.
+  # zhanlu_change end

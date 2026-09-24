@@ -39,6 +39,11 @@ env:
   VSCODE_QUALITY: insider
   ZHANLU_CODE_SOURCE_BRANCH: develop # zhanlu_change - wrapper workflow fetches zhanlu-code before source-owned scripts
 
+# zhanlu_change start - the default token only reads this repository; releases use a scoped PAT
+permissions:
+  contents: read
+# zhanlu_change end
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -50,7 +55,7 @@ jobs:
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -110,7 +115,7 @@ jobs:
       BUILD_SOURCEVERSION: ${{ env.BUILD_SOURCEVERSION }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -139,25 +144,21 @@ jobs:
         run: ./get_pr.sh
 
       - name: Setup GCC
-        uses: egor-tensin/setup-gcc@v2
+        uses: egor-tensin/setup-gcc@a2861a8b8538f49cf2850980acccf6b05a1b2ae4 # v2
         with:
           version: 10
           platform: x64
 
       - name: Setup Node.js environment
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Setup Python 3
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
-        if: env.SHOULD_BUILD == 'yes'
-
-      - name: Install pnpm
-        run: npm install -g pnpm
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Install libkrb5-dev
@@ -176,19 +177,17 @@ jobs:
         run: ./check_cron_or_pr.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for the legacy extension
+      - name: Write root .env for the Agent resource build
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build the legacy extension
+      - name: Build native Agent resources
         env:
-          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
+          ZHANLU_SKIP_AGENT_TYPECHECK: '1' # zhanlu_change - the type check emits no packaged output
           ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Get Open Remote SSH / WSL builtin extensions
@@ -230,7 +229,7 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Upload vscode artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vscode
           path: ./vscode.tar.gz.enc # zhanlu_change - ciphertext only
@@ -255,28 +254,13 @@ jobs:
           vscode_arch: arm64
           npm_arch: arm64
           image: vscodium/vscodium-linux-build-agent:focal-arm64
-        - slug: ARM32
-          vscode_arch: armhf
-          npm_arch: arm
-          image: vscodium/vscodium-linux-build-agent:focal-armhf
-        - slug: RISCV64
-          vscode_arch: riscv64
-          npm_arch: riscv64
-          image: vscodium/vscodium-linux-build-agent:focal-riscv64
-        - slug: LOONG64
-          vscode_arch: loong64
-          npm_arch: loong64
-          image: vscodium/vscodium-linux-build-agent:crimson-loong64
-        - slug: PPC64
-          vscode_arch: ppc64le
-          npm_arch: ppc64
-          image: vscodium/vscodium-linux-build-agent:focal-ppc64le
+    # zhanlu_change start - this fork ships only the desktop arches the native Agent supports; the
+    # unsupported upstream entries are dropped instead of pulling their container image to skip.
     container:
       image: ${{ matrix.image }}
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
-      # zhanlu_change start - native Agent desktop packages require an architecture-matched zl binary
-      DISABLED: ${{ (matrix.slug == 'ARM32' || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64') && 'yes' || vars[format('DISABLE_INSIDER_LINUX_APP_{0}', matrix.slug)] }}
+      DISABLED: ${{ vars[format('DISABLE_INSIDER_LINUX_APP_{0}', matrix.slug)] }}
       # zhanlu_change end
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
@@ -290,7 +274,7 @@ jobs:
       SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -319,10 +303,6 @@ jobs:
         run: ./get_pr.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Install pnpm
-        run: npm install -g pnpm
-        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
-
       - name: Install GH
         run: ./build/linux/install_gh.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'yes'
@@ -339,13 +319,13 @@ jobs:
         run: ./build/linux/deps.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with: # zhanlu_change - private build outputs must not enter public caches
           cache: false # zhanlu_change
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - name: Download vscode artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
@@ -357,20 +337,33 @@ jobs:
         run: node scripts/source-artifact.mjs decrypt vscode.tar.gz.enc vscode.tar.gz
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Write root .env for the legacy extension
+      - name: Write root .env for the Agent resource build
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
-      - name: Get and build the legacy extension
-        env:
-          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
-          # IMPORTANT: GITHUB_TOKEN can only access the current repository.
-          # For private repositories like zhanlu-vs, you need a Personal Access Token (PAT).
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
-        run: ./get_zhanlu.sh
+      # zhanlu_change start - target packaging regenerates MXC manifests with Bun
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.3.14'
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
+      - name: Restore Agent source from the core artifact
+        run: |
+          ./scripts/restore-zhanlu-agent-source.sh
+          # agent-web esbuild imports host modules from vscode/src; restore only unpacks zhanlu-agent.
+          tar -xzf vscode.tar.gz vscode/src
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
+      - name: Refresh Agent resources for the target architecture
+        env:
+          ZHANLU_AGENT_RESOURCES_PREBUILT: 'yes'
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+        run: ./build_zhanlu_agent_resources.sh
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+      # zhanlu_change end
 
       - name: Build
         env:
@@ -410,7 +403,7 @@ jobs:
       # zhanlu_change end
 
       - name: Upload assets
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bin-${{ matrix.vscode_arch }}
           path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
@@ -433,26 +426,9 @@ jobs:
         - slug: ARM64
           vscode_arch: arm64
           npm_arch: arm64
-        - slug: ARM32
-          vscode_arch: armhf
-          npm_arch: arm
-        - slug: PPC64
-          vscode_arch: ppc64le
-          npm_arch: ppc64
-        - slug: RISCV64
-          vscode_arch: riscv64
-          npm_arch: riscv64
-        - slug: LOONG64
-          vscode_arch: loong64
-          npm_arch: loong64
-        - slug: S390X
-          vscode_arch: s390x
-          npm_arch: s390x
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
-      # zhanlu_change start - skip REH arches vscode 1.126 does not ship (armhf) plus extra-arch gulp gaps
-      DISABLED: ${{ (matrix.slug == 'ARM32' || matrix.slug == 'PPC64' || matrix.slug == 'RISCV64' || matrix.slug == 'LOONG64' || matrix.slug == 'S390X') && 'yes' || vars[format('DISABLE_INSIDER_LINUX_REH_{0}', matrix.slug)] }}
-      # zhanlu_change end
+      DISABLED: ${{ vars[format('DISABLE_INSIDER_LINUX_REH_{0}', matrix.slug)] }}
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
       MS_TAG: ${{ needs.check.outputs.MS_TAG }}
       RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
@@ -462,7 +438,7 @@ jobs:
     if: needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -492,20 +468,20 @@ jobs:
         if: env.DISABLED != 'yes'
 
       - name: Setup GCC
-        uses: egor-tensin/setup-gcc@v2
+        uses: egor-tensin/setup-gcc@a2861a8b8538f49cf2850980acccf6b05a1b2ae4 # v2
         with:
           version: 10
           platform: x64
         if: env.DISABLED != 'yes'
 
       - name: Setup Node.js environment
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
         if: env.DISABLED != 'yes'
 
       - name: Setup Python 3
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
         if: env.DISABLED != 'yes'
@@ -527,29 +503,27 @@ jobs:
 
       # zhanlu_change start - build arch-matched zl for REH (compile artifact always embeds x64)
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.14'
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Write root .env for the legacy extension
+      - name: Write root .env for the Agent resource build
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Get and build the legacy extension CLI for target arch
+      - name: Build the native Agent CLI for the target architecture
         env:
-          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
-          ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
           ZHANLU_CLI_ONLY: 'yes'
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
       # zhanlu_change end
 
       - name: Download vscode artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -584,7 +558,7 @@ jobs:
       # zhanlu_change end
 
       - name: Upload assets
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: reh-linux-${{ matrix.vscode_arch }}
           path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
@@ -620,7 +594,7 @@ jobs:
     if: needs.check.outputs.SHOULD_BUILD == 'yes' || github.event.inputs.generate_assets == 'true'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -646,13 +620,13 @@ jobs:
         run: ./get_pr.sh
 
       - name: Setup GCC
-        uses: egor-tensin/setup-gcc@v2
+        uses: egor-tensin/setup-gcc@a2861a8b8538f49cf2850980acccf6b05a1b2ae4 # v2
         with:
           version: 10
           platform: x64
 
       - name: Setup Node.js environment
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
 
@@ -672,29 +646,27 @@ jobs:
 
       # zhanlu_change start - build arch-matched zl for REH (compile artifact always embeds x64)
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.14'
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Write root .env for the legacy extension
+      - name: Write root .env for the Agent resource build
         env:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
-      - name: Get and build the legacy extension CLI for target arch
+      - name: Build the native Agent CLI for the target architecture
         env:
-          ZHANLU_REPO_URL: ${{ vars.LEGACY_EXT_REPO_URL }}
-          ZHANLU_VS_REF: ${{ env.ZHANLU_VS_REF }}
           ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
           ZHANLU_CLI_ONLY: 'yes'
-        run: ./get_zhanlu.sh
+        run: ./build_zhanlu_agent_resources.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
       # zhanlu_change end
 
       - name: Download vscode artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -729,7 +701,7 @@ jobs:
       # zhanlu_change end
 
       - name: Upload assets
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: reh-alpine-${{ matrix.vscode_arch }}
           path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
@@ -737,107 +709,6 @@ jobs:
           if-no-files-found: error # zhanlu_change - reject missing ciphertext
         if: env.DISABLED != 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true' # zhanlu_change - release assets stay in the release only
 
-  aur:
-    needs:
-      - check
-      - build
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - package_name: zhanlu-insiders-bin # zhanlu_change - AUR publication should use Zhanlu package identity
-        - package_name: zhanlu-insiders # zhanlu_change - AUR publication should use Zhanlu package identity
-    if: needs.check.outputs.SHOULD_DEPLOY == 'yes' && github.event.inputs.generate_assets != 'true'
-
-    steps:
-      - name: Get version
-        env:
-          RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
-        run: echo "PACKAGE_VERSION=${RELEASE_VERSION/-*/}" >> "${GITHUB_ENV}"
-
-      - name: Publish ${{ matrix.package_name }}
-        uses: zokugun/github-actions-aur-releaser@v1
-        with:
-          package_name: ${{ matrix.package_name }}
-          package_version: ${{ env.PACKAGE_VERSION }}
-          aur_private_key: ${{ secrets.AUR_PRIVATE_KEY }}
-          aur_username: ${{ secrets.AUR_USERNAME }}
-          aur_email: ${{ secrets.AUR_EMAIL }}
-
-  snap:
-    needs:
-      - check
-      - build
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
-      SNAP_NAME: zhanlu-insiders # zhanlu_change - Snap package keeps lowercase Zhanlu binary/package name
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-        - amd64
-        - arm64
-    if: needs.check.outputs.SHOULD_DEPLOY == 'yes' && needs.check.outputs.SHOULD_BUILD_SNAP != 'no' && vars.DISABLE_INSIDER_SNAP != 'yes'
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false # zhanlu_change - no tokens in Git configuration
-          ref: ${{ env.GITHUB_BRANCH }}
-
-      # zhanlu_change start - short-lived source credentials with explicit read-only scope
-      - name: Create source read token
-        id: source-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
-        with: *source-read-inputs
-      # zhanlu_change end
-
-      - name: Fetch source code from private repository
-        env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
-          SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
-        run: ./fetch_source.sh # zhanlu_change - Snap packaging files live in zhanlu-code
-
-      - name: Switch to relevant branch
-        env:
-          PULL_REQUEST_ID: ${{ github.event.inputs.checkout_pr }}
-          ZHANLU_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral checkout credential
-        run: ./get_pr.sh
-
-      - uses: docker/setup-qemu-action@v3
-
-      - uses: diddlesnaps/snapcraft-multiarch-action@v1
-        with:
-          path: stores/snapcraft/insider
-          architecture: ${{ matrix.platform }}
-        id: build
-
-      # - uses: diddlesnaps/snapcraft-review-action@v1
-      #   with:
-      #     snap: ${{ steps.build.outputs.snap }}
-      #     isClassic: 'true'
-
-      - uses: svenstaro/upload-release-action@v2
-        with:
-          repo_name: ${{ env.ASSETS_REPOSITORY }}
-          repo_token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          file: ${{ steps.build.outputs.snap }}
-          tag: ${{ env.RELEASE_VERSION }}
-
-  deploy-repo-dev:
-    needs:
-      - check
-      - build
-    runs-on: ubuntu-latest
-    if: needs.check.outputs.SHOULD_DEPLOY == 'yes' && github.event.inputs.generate_assets != 'true'
-
-    steps:
-      - name: Trigger repository rebuild
-        uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
-          repository: ${{ vars.LINUX_REPOSITORIES_REPO }} # zhanlu_change - repository target comes from a repository variable
-          event-type: deploy
+  # zhanlu_change start - upstream publishes to AUR, Snap and external Linux repositories from this
+  # workflow. This fork delivers only GitHub release assets, so those jobs are not carried here.
+  # zhanlu_change end

@@ -16,6 +16,11 @@ on:
         type: boolean
         description: Disable dispatch
 
+# zhanlu_change start - the default token only reads this repository; releases use a scoped PAT
+permissions:
+  contents: read
+# zhanlu_change end
+
 jobs:
   build:
     runs-on: macos-14
@@ -36,7 +41,7 @@ jobs:
       ZHANLU_CODE_SOURCE_BRANCH: develop # zhanlu_change - wrapper workflow fetches zhanlu-code before source-owned scripts
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           ref: ${{ env.GITHUB_BRANCH }}
@@ -61,7 +66,7 @@ jobs:
         run: ./fetch_source.sh # zhanlu_change - source release scripts live in zhanlu-code
 
       - name: Setup Node.js environment
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
 
@@ -93,7 +98,7 @@ jobs:
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
@@ -110,7 +115,7 @@ jobs:
       # zhanlu_change - source archives and source maps are never release assets
 
       - name: Dispatch builds
-        uses: peter-evans/repository-dispatch@v4
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4
         with:
           event-type: insider
         if: github.event.inputs.dont_dispatch != 'true' && (env.SHOULD_BUILD == 'yes' || github.event.inputs.force_dispatch == 'true')

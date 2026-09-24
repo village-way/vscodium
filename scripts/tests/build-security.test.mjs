@@ -18,6 +18,8 @@ const roots = [];
 const temporary = () => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-security-')); roots.push(dir); return dir; };
 afterEach(() => roots.splice(0).forEach(dir => fs.rmSync(dir, { recursive: true, force: true })));
 const canary = 'fake-security-canary-token-never-a-real-secret';
+// The platform workflows live only in the public build entry; this repository owns the scripts they call.
+const publicEntry = fs.existsSync(path.join(root, 'fetch_source.sh'));
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf8', ...options, env: { ...process.env, ...options.env } });
 }
@@ -83,7 +85,7 @@ test('rejects credential-bearing and ambiguous repository URLs without echoing t
     assert.equal((result.stdout + result.stderr).includes(canary), false);
   }
 });
-test('every source artifact upload is ciphertext and every consumer authenticates before use', () => {
+test('every source artifact upload is ciphertext and every consumer authenticates before use', { skip: !publicEntry }, () => {
   let producers = 0, consumers = 0;
   for (const file of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => name.endsWith('.yml'))) {
     const source = fs.readFileSync(path.join(root, '.github/workflows', file), 'utf8').replaceAll('\r\n', '\n');
@@ -109,7 +111,7 @@ test('every source artifact upload is ciphertext and every consumer authenticate
   assert.equal(producers, 4);
   assert.equal(consumers, 8);
 });
-test('real archive recipe excludes nested credentials and Git metadata', () => {
+test('real archive recipe excludes nested credentials and Git metadata', { skip: !publicEntry }, () => {
   const cwd = temporary();
   for (const name of ['vscode/src/source.ts', 'vscode/.env', 'vscode/.git/config', 'vscode/.build/extensions/node_modules/pkg/.env', 'vscode/.build/extensions/node_modules/pkg/index.js']) {
     fs.mkdirSync(path.dirname(path.join(cwd, name)), { recursive: true });
@@ -184,7 +186,7 @@ if (fs.existsSync(path.join(root, 'prepare_src.sh'))) test('source release entry
 });
 
 
-test('source tokens use pinned read-only repository scope without a long-lived fallback', () => {
+test('source tokens use pinned read-only repository scope without a long-lived fallback', { skip: !publicEntry }, () => {
   let tokenJobs = 0;
   for (const file of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => name.endsWith('.yml'))) {
     const source = fs.readFileSync(path.join(root, '.github/workflows', file), 'utf8').replaceAll('\r\n', '\n');
@@ -245,7 +247,36 @@ test('archive preflight rejects nested npm credentials without echoing their val
 });
 
 
-test('Windows toolchain setup waits for installation and rejects unsuccessful or incomplete installs', { skip: process.platform !== 'win32' }, () => {
+test('restored source applies patches locally and restores job configuration without importing history', () => {
+  const cwd = temporary();
+  fs.mkdirSync(path.join(cwd, 'vscode/build'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'vscode/build/input'), 'before\n');
+  fs.writeFileSync(path.join(cwd, 'change.patch'), 'diff --git a/build/input b/build/input\n--- a/build/input\n+++ b/build/input\n@@ -1 +1 @@\n-before\n+after\n');
+  assert.equal(run('git', ['init', '-q'], { cwd }).status, 0);
+  fs.writeFileSync(path.join(cwd, '.env'), `RUNTIME_SETTING=${canary}\n`);
+  for (const relative of ['zhanlu-agent/packages/agent-core', '.build/zhanlu-agent-resources']) {
+    const resource = path.join(cwd, 'vscode', relative);
+    fs.mkdirSync(resource, { recursive: true });
+    fs.writeFileSync(path.join(resource, 'agent-resources-manifest.json'), '{}');
+  }
+  const result = run('bash', [path.join(root, 'scripts/prepare-restored-source.sh'), 'vscode'], { cwd });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((result.stdout + result.stderr).includes(canary), false);
+  const source = path.join(cwd, 'vscode');
+  assert.equal(run('git', ['config', '--local', 'pull.rebase', 'merges'], { cwd: source }).status, 0);
+  assert.notEqual(run('git', ['config', '--local', '--get', 'pull.rebase'], { cwd }).status, 0);
+  assert.equal(run('git', ['apply', '../change.patch'], { cwd: source }).status, 0);
+  assert.equal(fs.readFileSync(path.join(source, 'build/input'), 'utf8'), 'after\n');
+  assert.equal(run('git', ['remote'], { cwd: source }).stdout, '');
+  assert.notEqual(run('git', ['rev-parse', '--verify', 'HEAD'], { cwd: source }).status, 0);
+  assert.equal(fs.readFileSync(path.join(source, '.git/config'), 'utf8').includes(canary), false);
+  for (const relative of ['zhanlu-agent/packages/agent-core', '.build/zhanlu-agent-resources']) {
+    assert.equal(fs.readFileSync(path.join(source, relative, '.env'), 'utf8'), `RUNTIME_SETTING=${canary}\n`);
+  }
+});
+
+
+test('Windows toolchain setup waits for installation and rejects unsuccessful or incomplete installs', { skip: process.platform !== 'win32' || !publicEntry }, () => {
   for (const workflow of ['stable-windows.yml', 'insider-windows.yml']) {
     const contents = fs.readFileSync(path.join(root, '.github/workflows', workflow), 'utf8').replaceAll('\r\n', '\n');
     const step = contents.split('      - name: Install Visual Studio 2022 C++ build tools\n')[1].split('      # zhanlu_change end')[0];
@@ -322,5 +353,48 @@ test('draft release delivery never duplicates plaintext assets into workflow art
       assert.notEqual(run('bash', ['-c', script], { env: { REPOSITORY_IS_PRIVATE: 'false' } }).status, 0);
       assert.equal(run('bash', ['-c', script], { env: { REPOSITORY_IS_PRIVATE: 'true' } }).status, 0);
     }
+  }
+});
+
+// The platform workflows are the only copy of the build entry, so their shape is asserted here
+// instead of in the private repository's shell integration tests.
+const platformWorkflow = (quality, platform) =>
+  fs.readFileSync(path.join(root, '.github/workflows', `${quality}-${platform}.yml`), 'utf8').replaceAll('\r\n', '\n');
+
+test('every platform job builds Agent resources from the current source name', { skip: !publicEntry }, () => {
+  for (const quality of ['stable', 'insider']) {
+    for (const platform of ['linux', 'macos', 'windows']) {
+      const workflow = platformWorkflow(quality, platform);
+      const label = `${quality}-${platform}`;
+      assert.match(workflow, /build_zhanlu_agent_resources\.sh/, label);
+      assert.doesNotMatch(workflow, /get_zhanlu\.sh|get_zhanlu_loc\.sh/, label);
+      assert.doesNotMatch(workflow, /legacy extension|zhanlu_vs_ref|ZHANLU_VS_REF|LEGACY_EXT_/, label);
+      assert.match(workflow, /get_zhanlu_remote_exts\.sh/, label);
+      assert.doesNotMatch(workflow, /npm install -g pnpm/, label);
+    }
+  }
+});
+
+test('stable Linux keeps native Bridge preparation and Bun in the packaging job', { skip: !publicEntry }, () => {
+  const workflow = platformWorkflow('stable', 'linux');
+  assert.match(workflow, /^  prepare_responses_bridge:$/m);
+  assert.match(workflow, /runner: ubuntu-24\.04-arm/);
+  assert.match(workflow, /echo "ZHANLU_RESPONSES_BRIDGE_BIN_ROOT=\$GITHUB_WORKSPACE\/zhanlu-responses-bridge" >> "\$GITHUB_ENV"/);
+  const desktop = workflow.split(/^  build:$/m)[1].split(/^  [\w-]+:$/m)[0];
+  assert.match(desktop, /uses: oven-sh\/setup-bun@/, 'stable desktop packaging installs Bun');
+});
+
+test('stable release inputs expose the optional Codex runtime switch', { skip: !publicEntry }, () => {
+  for (const platform of ['linux', 'macos', 'windows']) {
+    assert.match(platformWorkflow('stable', platform), /bundle_codex_runtime:/, platform);
+  }
+  const spearhead = fs.readFileSync(path.join(root, '.github/workflows/stable-spearhead.yml'), 'utf8');
+  assert.match(spearhead, /--bundle-codex-runtime "\$\{ZHANLU_BUNDLE_CODEX_RUNTIME\}"/);
+});
+
+test('Windows releases ship Inno Setup installers without WiX packages', { skip: !publicEntry }, () => {
+  for (const quality of ['stable', 'insider']) {
+    const workflow = platformWorkflow(quality, 'windows');
+    assert.doesNotMatch(workflow, /\.msi/, quality);
   }
 });
