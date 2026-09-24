@@ -10,6 +10,8 @@ SOURCE_ROOT="${1:-vscode}"
 # A fresh repository prevents git apply/config from discovering the outer build checkout.
 # It has no commits, remotes or credentials and is never re-uploaded.
 git -C "${SOURCE_ROOT}" init -q
+# The archive holds LF sources; Windows runners default to autocrlf and would rewrite patched files.
+git -C "${SOURCE_ROOT}" config core.autocrlf false
 
 for resource_root in \
   "${SOURCE_ROOT}/zhanlu-agent/packages/agent-core" \
