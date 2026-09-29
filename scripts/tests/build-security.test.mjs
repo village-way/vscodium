@@ -9,7 +9,7 @@ import { rootCertificates } from 'node:tls';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { afterEach, test } from 'node:test';
 
@@ -168,6 +168,62 @@ test('failed fetch scrubs legacy remotes without writing or logging the canary t
   assert.equal((result.stdout + result.stderr).includes(canary), false);
   assert.equal(fs.readFileSync(path.join(checkout, '.git/config'), 'utf8').includes(canary), false);
   assert.equal(fs.existsSync(path.join(home, '.git-credentials')), false);
+});
+
+function subdirSourceFixture() {
+  const cwd = temporary(), home = path.join(cwd, 'home'), source = path.join(cwd, 'origin');
+  fs.mkdirSync(home);
+  fs.cpSync(path.join(root, 'scripts'), path.join(cwd, 'scripts'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'fetch_source.sh'), path.join(cwd, 'fetch_source.sh'));
+  for (const [name, content] of [['product.json', '{}\n'], ['kernel/README.md', 'kernel\n'],
+    ['packaging/get_repo.sh', 'echo packaged\n'], ['packaging/.nvmrc', '24\n'], ['packaging/upstream/stable.json', '{"tag":"1.0.0"}\n']]) {
+    fs.mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
+    fs.writeFileSync(path.join(source, name), content);
+  }
+  const git = (args, options = {}) => run('git', args, { cwd: source, env: { HOME: home }, ...options });
+  git(['init', '-q']); git(['add', '.']);
+  git(['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'init']);
+  git(['config', 'uploadpack.allowAnySHA1InWant', 'true']);
+  const commit = git(['rev-parse', 'HEAD']).stdout.trim();
+  fs.writeFileSync(path.join(home, '.gitconfig'), `[url "${pathToFileURL(source).href}"]\n\tinsteadOf = https://github.com/example/core\n`);
+  const githubEnv = path.join(cwd, 'github-env');
+  const invoke = (env = {}) => {
+    fs.writeFileSync(githubEnv, '');
+    return run('bash', ['fetch_source.sh'], { cwd, env: { HOME: home, XDG_CONFIG_HOME: home, CI_BUILD: 'yes',
+      GITHUB_ACTIONS: 'true', GITHUB_ENV: githubEnv, GITHUB_REPOSITORY: 'example/build', ASSETS_REPOSITORY: 'example/build',
+      SOURCE_REPO_URL: 'https://github.com/example/core', SOURCE_BRANCH: 'main', SOURCE_COMMIT: commit,
+      SOURCE_SUBDIR: 'packaging', ZHANLU_CORE_REF: '', ...env } });
+  };
+  return { cwd, commit, githubEnv, invoke };
+}
+
+test('subdirectory source layout copies the build tree and reuses the fetched commit for the kernel', { skip: !publicEntry }, () => {
+  const { cwd, commit, githubEnv, invoke } = subdirSourceFixture();
+  const result = invoke();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(fs.readFileSync(path.join(cwd, 'get_repo.sh'), 'utf8'), 'echo packaged\n');
+  assert.equal(fs.readFileSync(path.join(cwd, '.nvmrc'), 'utf8'), '24\n');
+  assert.equal(fs.readFileSync(path.join(cwd, 'upstream/stable.json'), 'utf8'), '{"tag":"1.0.0"}\n');
+  const checkout = path.join(cwd, '.source-repo');
+  assert.equal(fs.existsSync(path.join(checkout, 'kernel')), false, 'sparse checkout must only materialize the build tree');
+  assert.equal(run('git', ['-C', checkout, 'cat-file', '-e', `${commit}:kernel/README.md`]).status, 0, 'kernel objects stay available for archiving');
+  const exported = fs.readFileSync(githubEnv, 'utf8');
+  assert.match(exported, new RegExp(`^ZHANLU_CORE_GIT_DIR=.*\\.source-repo$`, 'm'));
+  assert.match(exported, new RegExp(`^ZHANLU_CORE_REF=${commit}$`, 'm'));
+});
+
+test('subdirectory source layout accepts only kernel refs naming the same source', { skip: !publicEntry }, () => {
+  const { commit, invoke } = subdirSourceFixture();
+  for (const ref of ['main', commit]) {
+    const result = invoke({ ZHANLU_CORE_REF: ref });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  }
+  const conflicting = invoke({ ZHANLU_CORE_REF: 'develop' });
+  assert.notEqual(conflicting.status, 0);
+  assert.match(conflicting.stderr, /builds both from one commit/);
+  for (const subdir of ['../packaging', '/packaging', 'packaging/../..', 'missing']) {
+    assert.notEqual(invoke({ SOURCE_SUBDIR: subdir }).status, 0, subdir);
+  }
 });
 
 if (fs.existsSync(path.join(root, 'prepare_src.sh'))) test('source release entrypoints and mixed binary/source publication fail before network access', () => {

@@ -72,6 +72,7 @@ env:
   OS_NAME: linux
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
+  SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }} # zhanlu_change - build tree subdirectory inside the source repository; empty for a root layout
   ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.source_ref || github.event.inputs.source_branch) || github.event.client_payload.source_ref || github.event.client_payload.source_branch || 'develop' }} # zhanlu_change
   SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_commit || github.event.client_payload.source_commit || '' }} # zhanlu_change
   ZHANLU_DELIVERY_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.delivery_profile || github.event.client_payload.delivery_profile || 'default' }} # zhanlu_change
@@ -179,6 +180,7 @@ jobs:
           ref: ${{ env.SOURCE_COMMIT || env.ZHANLU_CODE_SOURCE_BRANCH }}
           token: ${{ steps.source-token.outputs.token }}
           path: zhanlu-code-source
+          sparse-checkout: ${{ env.SOURCE_SUBDIR }} # only the build tree is needed; empty checks out everything
 
       - name: Checkout the Responses Bridge source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -203,7 +205,7 @@ jobs:
 
       - name: Build and verify Responses Bridge
         run: |
-          bash zhanlu-code-source/build/linux/prepare_zhanlu_responses_bridge.sh \
+          bash "zhanlu-code-source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/build/linux/prepare_zhanlu_responses_bridge.sh" \
             "${{ matrix.target }}" \
             "${{ github.workspace }}/responses-bridge-source" \
             "${{ runner.temp }}/zhanlu-responses-bridge"

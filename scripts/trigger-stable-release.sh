@@ -14,7 +14,7 @@
 #   --platform      指定平台 (macos|linux|windows|all)，默认 all
 #   --workflow-ref  VSCodium 工作流分支，默认当前分支
 #   --source-branch    zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
-#   --zhanlu-core-ref zhanlu-core 仓库分支或 commit，默认使用 upstream/stable.json 中的 commit
+#   --zhanlu-core-ref 根目录布局下单独指定内核分支或 commit；SOURCE_SUBDIR 布局下内核与构建树同源，只能留空或等于 --source-branch # zhanlu_change
 #   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
 #   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
 #   --dry-run       仅显示将要执行的命令，不实际执行
@@ -40,7 +40,7 @@ ZHANLU_DELIVERY_ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-}"
 # GitHub repository is known. # zhanlu_change
 WORKFLOW_REF="${WORKFLOW_REF:-}"
 # zhanlu_change end
-# zhanlu-core 分支 / tag / commit（为空时回退到 upstream/stable.json commit）
+# 内核分支 / tag / commit；为空时由源码侧决定（SOURCE_SUBDIR 布局下为同一源码 commit） # zhanlu_change
 ZHANLU_CORE_REF=""
 ZHANLU_BUNDLE_CODEX_RUNTIME="${ZHANLU_BUNDLE_CODEX_RUNTIME:-0}" # zhanlu_change
 # Release 版本：为空时触发前只解析一次，随后传给所有 workflow
@@ -89,7 +89,7 @@ VSCodium Stable 版本手动触发脚本
   --workflow-ref  VSCodium 工作流分支，默认当前分支
   --source-branch    zhanlu-code 分支，默认 develop
   --delivery-profile 定向交付 Profile，默认 default
-  --zhanlu-core-ref zhanlu-core 分支或 commit，默认使用 upstream/stable.json 中的 commit
+  --zhanlu-core-ref 根目录布局下单独指定内核分支或 commit；SOURCE_SUBDIR 布局下只能留空或等于 --source-branch
   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
   --version-time-patch 指定内部 VS Code 兼容版本的 4 位补丁号（可用 VERSION_TIME_PATCH 环境变量）
@@ -114,18 +114,14 @@ VSCodium Stable 版本手动触发脚本
   # 使用 zhanlu-code 的 master 分支构建
   ./scripts/trigger-stable-release.sh --workflow --source-branch master --platform all
 
-  # 使用 zhanlu-core 的 master 分支构建（不使用 upstream/stable.json 中的 commit）
-  ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref develop --platform all
-
-  # 使用指定 zhanlu-core 分支和版本构建
-  ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref develop --platform all  --release-version 1.0.1
+  # 使用指定源码分支和版本构建
+  ./scripts/trigger-stable-release.sh --workflow --source-branch develop --platform all --release-version 1.0.1
 
   # 使用公开版本 1.0.1，同时指定内部 VS Code 兼容版本补丁号 2827
-  VERSION_TIME_PATCH=2827 ./scripts/trigger-stable-release.sh --workflow --zhanlu-core-ref develop --platform all --release-version 1.0.1
+  VERSION_TIME_PATCH=2827 ./scripts/trigger-stable-release.sh --workflow --platform all --release-version 1.0.1
 
-
-  # 使用指定 zhanlu-code 分支和 zhanlu-core commit 构建
-  ./scripts/trigger-stable-release.sh --workflow --source-branch master --zhanlu-core-ref 7abce138e9579e9d48415342b721c916c55ef4d4 --platform all
+  # 根目录布局：构建树与内核来自不同仓库时单独指定内核分支
+  ./scripts/trigger-stable-release.sh --workflow --source-branch develop --zhanlu-core-ref develop --platform all
 
   # 使用已创建的 release/tag 构建并上传到同一个 Release
   ./scripts/trigger-stable-release.sh --workflow --release-version 1.126.05564 --platform all
@@ -525,7 +521,7 @@ trigger_workflow() {
         wf_fields+=(-f "zhanlu_core_ref=${ZHANLU_CORE_REF}")
         print_info "zhanlu-core Ref: ${ZHANLU_CORE_REF}"
     else
-        print_info "zhanlu-core Ref: 使用 upstream/stable.json 中的 commit"
+        print_info "内核 Ref: 由源码侧决定" # zhanlu_change
     fi
 
     local runs_json="[]"
@@ -601,7 +597,7 @@ main() {
     if [[ -n "${ZHANLU_CORE_REF}" ]]; then
         print_info "zhanlu-core Ref: $ZHANLU_CORE_REF"
     else
-        print_info "zhanlu-core Ref: upstream/stable.json commit"
+        print_info "内核 Ref: 由源码侧决定" # zhanlu_change
     fi
     print_info "仅生成 assets: $GENERATE_ONLY"
     print_info "强制更新版本: $FORCE_VERSION"

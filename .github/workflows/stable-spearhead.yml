@@ -44,6 +44,7 @@ jobs:
       KILO_VERSION: 1.0.0
       ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
       VSCODE_QUALITY: stable
+      SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }} # zhanlu_change - build tree subdirectory inside the source repository; empty for a root layout
       SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'develop' }} # zhanlu_change
       ZHANLU_DELIVERY_PROFILE: ${{ github.event.inputs.delivery_profile || 'default' }} # zhanlu_change
       ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ github.event.inputs.bundle_codex_runtime || '0' }} # zhanlu_change - scheduled builds have no inputs; default off matches the portal until the Linux Bridge job targets zhanlu-core
@@ -86,11 +87,17 @@ jobs:
 
       - name: Trigger stable platform workflows
         run: |
+          # zhanlu_change start - only a root layout builds the kernel from a separate ref
+          CORE_REF_ARGS=()
+          if [[ -z "${SOURCE_SUBDIR}" ]]; then
+            CORE_REF_ARGS=(--zhanlu-core-ref develop)
+          fi
+          # zhanlu_change end
           bash ./scripts/trigger-stable-release.sh \
             --workflow \
             --source-branch "${SOURCE_BRANCH}" \
             --delivery-profile "${ZHANLU_DELIVERY_PROFILE}" \
-            --zhanlu-core-ref develop \
+            "${CORE_REF_ARGS[@]}" \
             --bundle-codex-runtime "${ZHANLU_BUNDLE_CODEX_RUNTIME}" \
             --platform all \
             --release-version "${RELEASE_VERSION}"

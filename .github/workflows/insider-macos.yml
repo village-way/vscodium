@@ -35,6 +35,7 @@ env:
   OS_NAME: osx
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: insider
+  SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }} # zhanlu_change - build tree subdirectory inside the source repository; empty for a root layout
   ZHANLU_CODE_SOURCE_BRANCH: develop # zhanlu_change - wrapper workflow fetches zhanlu-code before source-owned scripts
 
 # zhanlu_change start - the default token only reads this repository; releases use a scoped PAT

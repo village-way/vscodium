@@ -9,6 +9,7 @@ resolve_release_delivery_profile() {
     local temp_root
     local archive
     local source_root
+    local package_root
     local result
     local encoded_ref
 
@@ -24,12 +25,19 @@ resolve_release_delivery_profile() {
     temp_root="$(mktemp -d "${TMPDIR:-/tmp}/zhanlu-release-profile.XXXXXX")"
     archive="${temp_root}/source.tar.gz"
     source_root="${temp_root}/source"
+    # The build tree may be a subdirectory of the source repository.
+    if [[ -n "${SOURCE_SUBDIR:-}" && ! "${SOURCE_SUBDIR}" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$ ]]; then
+        echo "Error: SOURCE_SUBDIR must be a relative directory inside the source repository" >&2
+        rm -rf "${temp_root}"
+        return 1
+    fi
+    package_root="${source_root}${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}"
     mkdir -p "${source_root}"
     if ! gh api "repos/${source_repository}/tarball/${ZHANLU_DELIVERY_SOURCE_COMMIT}" > "${archive}" || \
         ! tar -xzf "${archive}" --strip-components=1 -C "${source_root}" || \
-        ! result="$(node "${source_root}/scripts/resolve-delivery-profile.mjs" \
+        ! result="$(node "${package_root}/scripts/resolve-delivery-profile.mjs" \
             --profile "${profile_id}" \
-            --profiles-root "${source_root}/delivery-profiles" \
+            --profiles-root "${package_root}/delivery-profiles" \
             --staging "${temp_root}/staging" \
             --source-commit "${ZHANLU_DELIVERY_SOURCE_COMMIT}")"; then
         rm -rf "${temp_root}"
@@ -42,9 +50,9 @@ resolve_release_delivery_profile() {
     else
         ZHANLU_DELIVERY_ASSETS_REPOSITORY="$(jq -r '.assetsRepository' <<<"${result}")"
     fi
-    if [[ -f "${source_root}/release_notes.md" ]]; then
+    if [[ -f "${package_root}/release_notes.md" ]]; then
         ZHANLU_RELEASE_NOTES_TEMPLATE="$(mktemp)"
-        cp "${source_root}/release_notes.md" "${ZHANLU_RELEASE_NOTES_TEMPLATE}"
+        cp "${package_root}/release_notes.md" "${ZHANLU_RELEASE_NOTES_TEMPLATE}"
         if [[ -n "${TMP_FILES+x}" ]]; then
             TMP_FILES+=("${ZHANLU_RELEASE_NOTES_TEMPLATE}")
         fi

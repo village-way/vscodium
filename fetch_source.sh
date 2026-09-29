@@ -21,6 +21,21 @@ SOURCE_BRANCH="${SOURCE_BRANCH:-develop}"
 # zhanlu_change - platform fan-out may pin the exact zhanlu-code commit resolved during release preparation
 REQUESTED_SOURCE_COMMIT="${SOURCE_COMMIT:-}"
 SOURCE_DIR="${_SCRIPT_DIR}/.source-repo"
+# zhanlu_change start - the build tree may live in a subdirectory of a source repository that also holds the kernel
+SOURCE_SUBDIR="${SOURCE_SUBDIR:-}"
+if [[ -n "${SOURCE_SUBDIR}" && ! "${SOURCE_SUBDIR}" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$ ]]; then
+    echo "Error: SOURCE_SUBDIR must be a relative directory inside the source repository" >&2
+    exit 1
+fi
+
+configure_source_sparse_checkout() {
+    if [[ -n "${SOURCE_SUBDIR}" ]]; then
+        git sparse-checkout set --cone "${SOURCE_SUBDIR}"
+    elif [[ "$(git config --bool core.sparseCheckout || true)" == "true" ]]; then
+        git sparse-checkout disable
+    fi
+}
+# zhanlu_change end
 
 # zhanlu_change start - customer deliveries never follow an unpinned branch from a direct workflow invocation
 if [[ -n "${REQUESTED_SOURCE_COMMIT}" && ! "${REQUESTED_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -51,6 +66,7 @@ echo "=== Source Code Fetching Script ==="
 echo "SOURCE_BRANCH: ${SOURCE_BRANCH}"
 echo "SOURCE_COMMIT: ${REQUESTED_SOURCE_COMMIT:-<resolve from branch>}" # zhanlu_change
 echo "SOURCE_DIR: ${SOURCE_DIR}"
+echo "SOURCE_SUBDIR: ${SOURCE_SUBDIR:-<repository root>}" # zhanlu_change
 
 # git workaround for CI environments
 if [[ "${CI_BUILD}" != "no" ]] || [[ -n "${GITHUB_ACTIONS}" ]]; then
@@ -73,6 +89,7 @@ if [[ -d "${SOURCE_DIR}/.git" ]]; then
     
     # zhanlu_change - overwrite legacy credential-bearing remotes even without a token
     git remote set-url origin "${SOURCE_REPO_URL}"
+    configure_source_sparse_checkout # zhanlu_change
 
     # zhanlu_change start - prefer the pinned commit; retain branch-only compatibility
     SOURCE_FETCH_REF="${REQUESTED_SOURCE_COMMIT:-${SOURCE_BRANCH}}"
@@ -98,6 +115,7 @@ else
     git init -q
     git config core.autocrlf false # zhanlu_change - preserve release-pinned Profile bytes on Windows
     git remote add origin "${SOURCE_REPO_URL}"
+    configure_source_sparse_checkout # zhanlu_change
     
     # 获取指定分支
     # zhanlu_change start - fetch a release-pinned commit when supplied
@@ -118,6 +136,24 @@ fi
 if [[ -n "${REQUESTED_SOURCE_COMMIT}" && "${SOURCE_COMMIT}" != "${REQUESTED_SOURCE_COMMIT}" ]]; then
     echo "Error: fetched source commit ${SOURCE_COMMIT}, expected ${REQUESTED_SOURCE_COMMIT}"
     exit 1
+fi
+# zhanlu_change end
+
+# zhanlu_change start - a subdirectory layout builds the kernel from the same fetched commit
+SOURCE_ROOT="${SOURCE_DIR}${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}"
+if [[ ! -d "${SOURCE_ROOT}" ]]; then
+    echo "Error: ${SOURCE_SUBDIR} not found at source commit ${SOURCE_COMMIT}" >&2
+    exit 1
+fi
+if [[ -n "${SOURCE_SUBDIR}" ]]; then
+    # A separately requested kernel ref is accepted only while it names the same source.
+    if [[ -n "${ZHANLU_CORE_REF:-}" && "${ZHANLU_CORE_REF}" != "${SOURCE_BRANCH}" && "${ZHANLU_CORE_REF}" != "${SOURCE_COMMIT}" ]]; then
+        echo "Error: kernel ref ${ZHANLU_CORE_REF} differs from source ${SOURCE_BRANCH}@${SOURCE_COMMIT}; this layout builds both from one commit" >&2
+        exit 1
+    fi
+    ZHANLU_CORE_GIT_DIR="${SOURCE_DIR}"
+    ZHANLU_CORE_REF="${SOURCE_COMMIT}"
+    export ZHANLU_CORE_GIT_DIR ZHANLU_CORE_REF
 fi
 # zhanlu_change end
 
@@ -143,10 +179,10 @@ DIRS_TO_COPY=(
 
 # 复制目录
 for dir in "${DIRS_TO_COPY[@]}"; do
-    if [[ -d "${SOURCE_DIR}/${dir}" ]]; then
+    if [[ -d "${SOURCE_ROOT}/${dir}" ]]; then # zhanlu_change
         echo "Copying ${dir}/..."
         rm -rf "${_SCRIPT_DIR}/${dir}"
-        cp -r "${SOURCE_DIR}/${dir}" "${_SCRIPT_DIR}/"
+        cp -r "${SOURCE_ROOT}/${dir}" "${_SCRIPT_DIR}/" # zhanlu_change
     else
         echo "Warning: ${dir}/ not found in source repository"
     fi
@@ -197,9 +233,9 @@ FILES_TO_COPY=(
 echo ""
 echo "Copying individual files..."
 for file in "${FILES_TO_COPY[@]}"; do
-    if [[ -f "${SOURCE_DIR}/${file}" ]]; then
+    if [[ -f "${SOURCE_ROOT}/${file}" ]]; then # zhanlu_change
         echo "Copying ${file}..."
-        cp "${SOURCE_DIR}/${file}" "${_SCRIPT_DIR}/"
+        cp "${SOURCE_ROOT}/${file}" "${_SCRIPT_DIR}/" # zhanlu_change
     else
         echo "Warning: ${file} not found in source repository"
     fi
@@ -254,6 +290,12 @@ if [[ "${GITHUB_ENV}" ]]; then
     echo "ZHANLU_DELIVERY_PROFILE=${ZHANLU_DELIVERY_PROFILE}" >> "${GITHUB_ENV}" # zhanlu_change
     echo "ZHANLU_DELIVERY_SOURCE_COMMIT=${SOURCE_COMMIT}" >> "${GITHUB_ENV}" # zhanlu_change
     echo "ZHANLU_DELIVERY_PROFILE_DIGEST=${ZHANLU_DELIVERY_PROFILE_DIGEST}" >> "${GITHUB_ENV}" # zhanlu_change
+    # zhanlu_change start - later kernel preparation archives this checkout instead of cloning again
+    if [[ -n "${SOURCE_SUBDIR}" ]]; then
+        echo "ZHANLU_CORE_GIT_DIR=${ZHANLU_CORE_GIT_DIR}" >> "${GITHUB_ENV}"
+        echo "ZHANLU_CORE_REF=${ZHANLU_CORE_REF}" >> "${GITHUB_ENV}"
+    fi
+    # zhanlu_change end
 fi
 
 echo ""
