@@ -155,7 +155,7 @@ fi
 if [[ -z "${MS_TAG}" ]] || [[ -z "${MS_COMMIT}" ]]; then
     if [[ -f "upstream/${VSCODE_QUALITY}.json" ]]; then
         MS_TAG="${MS_TAG:-$(jq -r '.tag' "upstream/${VSCODE_QUALITY}.json")}"
-        MS_COMMIT="${MS_COMMIT:-$(jq -r '.commit' "upstream/${VSCODE_QUALITY}.json")}"
+        MS_COMMIT="${MS_COMMIT:-$(jq -r '.commit // empty' "upstream/${VSCODE_QUALITY}.json")}" # zhanlu_change - pins may be tag-only
     fi
 fi
 

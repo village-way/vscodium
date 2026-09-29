@@ -68,6 +68,7 @@ env:
   ORG_NAME: Ecloud # zhanlu_change - app ids must not depend on GitHub owner
   OS_NAME: osx
   VSCODE_QUALITY: stable
+  SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }} # zhanlu_change - build tree subdirectory inside the source repository; empty for a root layout
   ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.source_ref || github.event.inputs.source_branch) || github.event.client_payload.source_ref || github.event.client_payload.source_branch || 'develop' }} # zhanlu_change
   SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_commit || github.event.client_payload.source_commit || '' }} # zhanlu_change
   ZHANLU_DELIVERY_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.delivery_profile || github.event.client_payload.delivery_profile || 'default' }} # zhanlu_change
