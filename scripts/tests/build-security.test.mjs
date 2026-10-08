@@ -269,6 +269,18 @@ if (fs.existsSync(path.join(root, 'prepare_src.sh'))) test('source release entry
 });
 
 
+test('a failed platform dispatch still dispatches the remaining platforms and fails the trigger', { skip: !publicEntry || process.platform === 'win32' }, () => {
+  const cwd = temporary(), bin = path.join(cwd, 'bin'), calls = path.join(cwd, 'dispatches');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/usr/bin/env bash\ncat >/dev/null\necho "$2" >> "$DISPATCH_LOG"\ncase "$2" in *stable-linux.yml*) exit 1 ;; esac\necho \'{"workflow_run_id":7,"html_url":"https://example.invalid/run/7"}\'\n', { mode: 0o755 });
+  const result = run('bash', ['-c', 'source "$1" --workflow --output json --request-id req-1; REPO=example/build; WORKFLOW_REF=develop; trigger_workflow', 'test',
+    path.join(root, 'scripts/trigger-stable-release.sh')], { cwd, env: { DISPATCH_LOG: calls, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n').map(line => line.split('/').at(-2)), ['stable-macos.yml', 'stable-linux.yml', 'stable-windows.yml']);
+  const summary = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"')));
+  assert.deepEqual(summary.runs.map(item => item.workflow), ['stable-macos.yml', 'stable-windows.yml']);
+  assert.match(result.stdout, /未确认触发: stable-linux\.yml/);
+});
 test('source tokens use pinned read-only repository scope without a long-lived fallback', { skip: !publicEntry }, () => {
   let tokenJobs = 0;
   for (const file of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => name.endsWith('.yml'))) {
