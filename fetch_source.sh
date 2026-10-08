@@ -61,6 +61,23 @@ fi
 # zhanlu_change start - keep credentials out of URLs, logs and Git configuration
 source "${_SCRIPT_DIR}/scripts/secure-git.sh"
 validate_source_url "${SOURCE_REPO_URL}"
+# A freshly issued repository token can answer 404 for a few seconds, so retry before failing.
+SOURCE_FETCH_RETRY_DELAY="${SOURCE_FETCH_RETRY_DELAY:-5}"
+if [[ ! "${SOURCE_FETCH_RETRY_DELAY}" =~ ^[0-9]+$ ]]; then
+    echo "Error: SOURCE_FETCH_RETRY_DELAY must be a whole number of seconds" >&2
+    exit 1
+fi
+fetch_source_ref() {
+    local attempt=1
+    until secure_git fetch "$@"; do
+        if (( attempt >= 4 )); then
+            return 1
+        fi
+        echo "Fetch attempt ${attempt} failed; retrying in $(( attempt * SOURCE_FETCH_RETRY_DELAY ))s..." >&2
+        sleep "$(( attempt * SOURCE_FETCH_RETRY_DELAY ))"
+        attempt=$(( attempt + 1 ))
+    done
+}
 echo "=== Source Code Fetching Script ==="
 # zhanlu_change end
 echo "SOURCE_BRANCH: ${SOURCE_BRANCH}"
@@ -93,7 +110,7 @@ if [[ -d "${SOURCE_DIR}/.git" ]]; then
 
     # zhanlu_change start - prefer the pinned commit; retain branch-only compatibility
     SOURCE_FETCH_REF="${REQUESTED_SOURCE_COMMIT:-${SOURCE_BRANCH}}"
-    secure_git fetch origin "${SOURCE_FETCH_REF}" || {
+    fetch_source_ref origin "${SOURCE_FETCH_REF}" || {
         echo "Error: Failed to fetch from origin. Check your token permissions."
         exit 1
     }
@@ -121,7 +138,7 @@ else
     # zhanlu_change start - fetch a release-pinned commit when supplied
     SOURCE_FETCH_REF="${REQUESTED_SOURCE_COMMIT:-${SOURCE_BRANCH}}"
     echo "Fetching source ref: ${SOURCE_FETCH_REF}"
-    secure_git fetch --depth 1 origin "${SOURCE_FETCH_REF}" || {
+    fetch_source_ref --depth 1 origin "${SOURCE_FETCH_REF}" || {
         echo "Error: Failed to clone repository. Check your token permissions."
         exit 1
     }

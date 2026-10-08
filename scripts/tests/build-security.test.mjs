@@ -78,6 +78,17 @@ test('Git does not persist credentials through a configured store helper', () =>
   assert.equal(fs.existsSync(path.join(cwd, '.git-credentials')), false);
   assert.equal(fs.readFileSync(path.join(cwd, '.gitconfig'), 'utf8').includes(canary), false);
 });
+test('Git runs without inherited trace switches that would log HTTP traffic', { skip: process.platform === 'win32' }, () => {
+  const cwd = temporary();
+  const bin = path.join(cwd, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'git'), '#!/usr/bin/env bash\nenv | grep -E "^GIT_(TRACE|CURL)" || true\n', { mode: 0o755 });
+  const traced = Object.fromEntries(['GIT_TRACE', 'GIT_TRACE_CURL', 'GIT_CURL_VERBOSE', 'GIT_TRACE_PACKET', 'GIT_TRACE2_EVENT'].map(name => [name, '1']));
+  const result = run('bash', ['-c', 'source "$1"; secure_git version', 'test', path.join(root, 'scripts/secure-git.sh')],
+    { cwd, env: { ...traced, GIT_TRACE_REDACT: '0', PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '');
+});
 test('rejects credential-bearing and ambiguous repository URLs without echoing them', () => {
   for (const url of [`https://${canary}@github.com/example/repo.git`, `https://github.com/example/repo?token=${canary}`, `https://github.com/example/repo\n${canary}`]) {
     const result = run('bash', ['-c', 'source "$1"; validate_source_url "$SOURCE_URL_FIXTURE"', 'test', path.join(root, 'scripts/secure-git.sh').replaceAll('\\', '/')], { env: { SOURCE_URL_FIXTURE: url } });
@@ -160,7 +171,7 @@ test('failed fetch scrubs legacy remotes without writing or logging the canary t
   const env = { HOME: home, XDG_CONFIG_HOME: home, CI_BUILD: 'yes', GITHUB_ACTIONS: 'true',
     GITHUB_ENV: '', GITHUB_REPOSITORY: 'example/build', VSCODE_REPO: 'origin', VSCODE_QUALITY: 'stable',
     SOURCE_REPO_URL: 'https://github.com/example/private.git', ZHANLU_GITHUB_TOKEN: canary,
-    REAL_GIT: realGit, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+    REAL_GIT: realGit, PATH: `${bin}${path.delimiter}${process.env.PATH}`, SOURCE_FETCH_RETRY_DELAY: '0' };
   assert.equal(run('bash', ['-c', '"$REAL_GIT" init -q', 'test'], { cwd: checkout, env }).status, 0);
   assert.equal(run('bash', ['-c', '"$REAL_GIT" remote add origin "$1"', 'test', `https://${canary}@github.com/example/private.git`], { cwd: checkout, env }).status, 0);
   const result = run('bash', ['-x', entry], { cwd, env });
@@ -210,6 +221,22 @@ test('subdirectory source layout copies the build tree and reuses the fetched co
   const exported = fs.readFileSync(githubEnv, 'utf8');
   assert.match(exported, new RegExp(`^ZHANLU_CORE_GIT_DIR=.*\\.source-repo$`, 'm'));
   assert.match(exported, new RegExp(`^ZHANLU_CORE_REF=${commit}$`, 'm'));
+});
+
+test('source fetch retries a transient failure and gives up after four attempts', { skip: !publicEntry }, () => {
+  const { cwd, invoke } = subdirSourceFixture();
+  const bin = path.join(cwd, 'bin'), attempts = path.join(cwd, 'fetch-attempts');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'git'), '#!/usr/bin/env bash\ncase " $* " in *" fetch "*) echo x >> "$FETCH_ATTEMPTS"; [[ $(wc -l < "$FETCH_ATTEMPTS") -gt $FETCH_FAILURES ]] || exit 128 ;; esac\nexec "$REAL_GIT" "$@"\n', { mode: 0o755 });
+  const env = failures => ({ FETCH_ATTEMPTS: attempts, FETCH_FAILURES: String(failures), SOURCE_FETCH_RETRY_DELAY: '0', SOURCE_FORCE_CLONE: 'yes',
+    REAL_GIT: run('bash', ['-c', 'command -v git']).stdout.trim(), PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+  const recovered = invoke(env(2));
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.match(recovered.stderr, /Fetch attempt 2 failed; retrying/);
+  fs.rmSync(attempts);
+  assert.notEqual(invoke(env(9)).status, 0);
+  assert.equal(fs.readFileSync(attempts, 'utf8').split('\n').filter(Boolean).length, 4);
+  assert.notEqual(invoke({ SOURCE_FETCH_RETRY_DELAY: '1; id' }).status, 0);
 });
 
 test('subdirectory source layout accepts only kernel refs naming the same source', { skip: !publicEntry }, () => {

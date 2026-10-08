@@ -14,8 +14,9 @@ secure_git() (
   local helper
   printf -v helper '%q' "$_BUILD_GIT_HELPER"
   export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false
-  export GIT_TRACE=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0 GIT_TRACE_PACKET=0
-  export GIT_TRACE_SETUP=0 GIT_TRACE_PERFORMANCE=0 GIT_TRACE2=0 GIT_TRACE2_EVENT=0 GIT_TRACE2_PERF=0
+  # Git enables curl tracing whenever GIT_CURL_VERBOSE is set, even to 0, so clear these instead.
+  unset GIT_TRACE GIT_TRACE_CURL GIT_TRACE_CURL_NO_DATA GIT_CURL_VERBOSE GIT_TRACE_PACKET GIT_TRACE_PACKFILE
+  unset GIT_TRACE_SETUP GIT_TRACE_PERFORMANCE GIT_TRACE_REDACT GIT_TRACE2 GIT_TRACE2_EVENT GIT_TRACE2_PERF
   command git -c credential.helper= -c "credential.helper=!bash $helper" \
     -c http.extraHeader= -c http.followRedirects=false "$@"
 )
