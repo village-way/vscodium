@@ -525,6 +525,7 @@ trigger_workflow() {
     fi
 
     local runs_json="[]"
+    local -a failed_workflows=() # zhanlu_change
     for workflow in "${workflows[@]}"; do
         print_info "触发工作流: $workflow"
         if [[ "$DRY_RUN" == true ]]; then
@@ -544,18 +545,22 @@ for index in range(0, len(args), 2):
 print(json.dumps({"ref": sys.argv[1], "inputs": inputs}))
 PY
 )"
-            response="$(gh api "repos/${REPO}/actions/workflows/${workflow}/dispatches" \
+            # zhanlu_change start - one failed platform must not stop dispatching the others
+            local run_id="" run_url=""
+            if response="$(gh api "repos/${REPO}/actions/workflows/${workflow}/dispatches" \
                 --method POST \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2026-03-10" \
-                --input - <<<"${payload}")"
-            local run_id run_url
-            run_id="$(jq -r '.workflow_run_id // .workflow_run.id // empty' <<<"${response}")"
-            run_url="$(jq -r '.html_url // .workflow_run.html_url // .url // empty' <<<"${response}")"
-            if [[ -z "${run_id}" || -z "${run_url}" ]]; then
-                print_error "GitHub dispatch 未返回 ${workflow} 的 run ID/URL；拒绝猜测归属"
-                exit 1
+                --input - <<<"${payload}")"; then
+                run_id="$(jq -r '.workflow_run_id // .workflow_run.id // empty' <<<"${response}" 2>/dev/null || true)"
+                run_url="$(jq -r '.html_url // .workflow_run.html_url // .url // empty' <<<"${response}" 2>/dev/null || true)"
             fi
+            if [[ -z "${run_id}" || -z "${run_url}" ]]; then
+                print_error "GitHub dispatch 未返回 ${workflow} 的 run ID/URL；拒绝猜测归属，继续触发其余平台"
+                failed_workflows+=("${workflow}")
+                continue
+            fi
+            # zhanlu_change end
             runs_json="$(jq -c --arg workflow "${workflow}" --argjson runId "${run_id}" --arg url "${run_url}" '. + [{workflow: $workflow, runId: $runId, url: $url}]' <<<"${runs_json}")"
         fi
 
@@ -571,6 +576,13 @@ PY
                 '{schemaVersion:"v1",requestId:($requestId|select(length>0)),runs:$runs}'
         fi
     fi
+    # zhanlu_change start - a timed-out dispatch may still have started, so recovery stays manual
+    if [[ ${#failed_workflows[@]} -gt 0 ]]; then
+        print_error "以下工作流未确认触发: ${failed_workflows[*]}"
+        print_error "先在 https://github.com/${REPO}/actions 确认没有对应的新运行，再用 --platform 单独补触发"
+        exit 1
+    fi
+    # zhanlu_change end
 }
 
 # 主流程
@@ -617,4 +629,4 @@ main() {
     print_success "完成！"
 }
 
-main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main; fi # zhanlu_change - tests source the helpers without triggering
