@@ -578,8 +578,7 @@ PY
     fi
     # zhanlu_change start - a timed-out dispatch may still have started, so recovery stays manual
     if [[ ${#failed_workflows[@]} -gt 0 ]]; then
-        print_error "以下工作流未确认触发: ${failed_workflows[*]}"
-        print_error "先在 https://github.com/${REPO}/actions 确认没有对应的新运行，再用 --platform 单独补触发"
+        print_error "以下工作流未确认触发: ${failed_workflows[*]}；先在 https://github.com/${REPO}/actions 确认没有对应的新运行，再用 --platform 单独补触发"
         exit 1
     fi
     # zhanlu_change end
