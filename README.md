@@ -29,6 +29,9 @@ platform run IDs all succeed. Only the standard delivery profile with Release
 output enables publication; workflow-artifact output and customer profiles skip
 it. Draft Releases are eligible. The package uses the release's pinned source
 commit, with `latest` for formal releases and `next` for development releases.
+The wait job needs `contents: write` because GitHub only lists Draft Releases
+for callers with push access. It only reads release metadata and has no OIDC
+permission; the publication job keeps `contents: read`.
 
 Configure `RELEASE_METADATA_ASSET` with the existing delivery metadata asset
 filename. The source supplies `scripts/npm-package-runtime.mjs` and
