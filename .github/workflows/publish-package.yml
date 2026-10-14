@@ -19,6 +19,10 @@ on:
       platform_runs:
         type: string
         required: true
+      platform_workflow_commit:
+        type: string
+        description: Original platform workflow commit when recovering after a workflow update
+        required: false
 
 run-name: publish-package · ${{ inputs.release_version }} · ${{ inputs.request_id }}
 permissions:
@@ -30,6 +34,7 @@ env:
   SOURCE_COMMIT: ${{ inputs.source_commit }}
   REQUEST_ID: ${{ inputs.request_id }}
   PLATFORM_RUNS: ${{ inputs.platform_runs }}
+  PLATFORM_WORKFLOW_COMMIT: ${{ inputs.platform_workflow_commit || github.sha }}
   SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
 
 jobs:
