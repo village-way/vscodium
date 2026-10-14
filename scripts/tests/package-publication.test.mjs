@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { batchStatus, validateBatch, verifyMetadata, waitForRelease } from '../wait-release-runs.mjs';
+import { batchStatus, findRelease, validateBatch, verifyMetadata, waitForRelease } from '../wait-release-runs.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,7 +16,7 @@ test('waits for every selected platform and then validates the fixed release sou
   await waitForRelease(context, async route => {
     if (route.startsWith('/actions/runs/')) return detail(context.runs.find(run => route.endsWith(`/${run.runId}`)), completed ? 'completed' : 'in_progress');
     assert.equal(completed, true);
-    if (route.startsWith('/releases/tags/')) return { assets: [{ name: 'delivery.json', id: 9 }] };
+    if (route.startsWith('/releases?')) return [{ tag_name: context.version, draft: true, assets: [{ name: 'delivery.json', id: 9 }] }];
     metadataRead = true;
     return metadata;
   }, { sleep: async () => { completed = true; } });
@@ -24,6 +24,28 @@ test('waits for every selected platform and then validates the fixed release sou
   const single = { ...context, runs: context.runs.slice(0, 1) };
   assert.doesNotThrow(() => validateBatch(single));
   assert.equal(batchStatus(single, [detail(single.runs[0])]), true);
+});
+
+test('finds an exact draft release across pages instead of the published-only tag endpoint', async () => {
+  const routes = [];
+  const release = { tag_name: context.version, draft: true, id: 42 };
+  const found = await findRelease(context, async route => {
+    routes.push(route);
+    if (route.endsWith('page=1')) return Array.from({ length: 100 }, (_, index) => ({ tag_name: `unrelated-${index}` }));
+    return [release];
+  });
+  assert.equal(found, release);
+  assert.deepEqual(routes, ['/releases?per_page=100&page=1', '/releases?per_page=100&page=2']);
+  await assert.rejects(findRelease(context, async () => []), /missing or inaccessible/);
+  await assert.rejects(findRelease(context, async () => [release, release]), /Ambiguous/);
+});
+
+test('recovery pins the original platform commit even when the publication workflow has changed', () => {
+  const recovered = { ...context, workflowCommit: 'c'.repeat(40) };
+  assert.doesNotThrow(() => validateBatch(recovered));
+  assert.equal(batchStatus(recovered, context.runs.map(run => ({ ...detail(run), head_sha: recovered.workflowCommit }))), true);
+  assert.throws(() => batchStatus(recovered, context.runs.map(run => detail(run))), /does not belong/);
+  assert.throws(() => validateBatch({ ...context, workflowCommit: 'develop' }), /Invalid release identity/);
 });
 
 test('failed, cancelled and timed-out platforms block package publication', () => {

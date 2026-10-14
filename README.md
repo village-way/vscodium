@@ -45,3 +45,8 @@ Retry the package Action against the original platform run IDs after correcting
 a failed platform or npm permission. Existing matching package content is reused
 and channel promotion is repaired. An immutable version with different content
 is rejected, and older releases do not move installation channels backwards.
+If the workflow was updated after the platform batch started, set
+`platform_workflow_commit` to that batch's original workflow SHA while preserving
+its request ID and run IDs. The release lookup includes drafts by matching the
+exact tag in the paginated releases list; GitHub's tag endpoint returns published
+releases only.
