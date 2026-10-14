@@ -1,0 +1,101 @@
+name: publish-package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        type: string
+        required: true
+      release_kind:
+        type: choice
+        required: true
+        options: [formal, development]
+      source_commit:
+        type: string
+        required: true
+      request_id:
+        type: string
+        required: true
+      platform_runs:
+        type: string
+        required: true
+
+run-name: publish-package · ${{ inputs.release_version }} · ${{ inputs.request_id }}
+permissions:
+  contents: read
+
+env:
+  RELEASE_VERSION: ${{ inputs.release_version }}
+  RELEASE_KIND: ${{ inputs.release_kind }}
+  SOURCE_COMMIT: ${{ inputs.source_commit }}
+  REQUEST_ID: ${{ inputs.request_id }}
+  PLATFORM_RUNS: ${{ inputs.platform_runs }}
+  SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
+
+jobs:
+  wait:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify selected platform publications
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_METADATA_ASSET: ${{ vars.RELEASE_METADATA_ASSET }}
+        run: node scripts/wait-release-runs.mjs
+
+  publish:
+    needs: wait
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: npm-package-publication
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
+          permission-contents: read
+      - name: Checkout pinned source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ vars.SOURCE_REPOSITORY }}
+          ref: ${{ inputs.source_commit }}
+          token: ${{ steps.source-token.outputs.token }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Read pinned package runtime
+        id: runtime
+        run: node "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/npm-package-runtime.mjs" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.runtime.outputs.bun-version }}
+      - run: npm install --global npm@11.21.0
+      - name: Publish verified package with OIDC
+        run: bash "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/publish-npm-package.sh"

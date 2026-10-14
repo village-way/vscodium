@@ -23,3 +23,25 @@ persistent helpers. Build-security tests run without production secrets on Linux
 Windows and macOS. These controls protect public artifacts; the CI platform and
 trusted build jobs necessarily have access to build inputs and secrets. Existing
 artifacts and logs require separate incident cleanup and credential rotation.
+
+Package publication runs in `publish-package.yml` after the exact selected
+platform run IDs all succeed. Only the standard delivery profile with Release
+output enables publication; workflow-artifact output and customer profiles skip
+it. Draft Releases are eligible. The package uses the release's pinned source
+commit, with `latest` for formal releases and `next` for development releases.
+
+Configure `RELEASE_METADATA_ASSET` with the existing delivery metadata asset
+filename. The source supplies `scripts/npm-package-runtime.mjs` and
+`scripts/publish-npm-package.sh` under `SOURCE_SUBDIR`. The source read App and
+repository variables are shared with the platform builds.
+
+The npm package's Trusted Publisher must authorize this owner/repository and
+`publish-package.yml`, allowing direct publication and dist-tag management.
+Only the publication job requests `id-token: write`; no npm token is needed.
+The job pins npm 11.21.0 and reads Bun's version from the source. Package jobs
+queue serially using GitHub's `queue: max` concurrency option.
+
+Retry the package Action against the original platform run IDs after correcting
+a failed platform or npm permission. Existing matching package content is reused
+and channel promotion is repaired. An immutable version with different content
+is rejected, and older releases do not move installation channels backwards.
