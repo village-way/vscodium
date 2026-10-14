@@ -16,6 +16,7 @@
 #   --source-branch    zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
 #   --zhanlu-core-ref 根目录布局下单独指定内核分支或 commit；SOURCE_SUBDIR 布局下内核与构建树同源，只能留空或等于 --source-branch # zhanlu_change
 #   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
+#   --release-kind     formal or development (default development) # zhanlu_change
 #   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
 #   --dry-run       仅显示将要执行的命令，不实际执行
 #   --help          显示帮助信息
@@ -49,6 +50,9 @@ RELEASE_VERSION="${RELEASE_VERSION:-}"
 VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
 REQUEST_ID=""
 OUTPUT_FORMAT="text"
+# zhanlu_change start - release kind selects the npm channel explicitly
+RELEASE_KIND="development"
+# zhanlu_change end
 
 # 颜色输出
 RED='\033[0;31m'
@@ -184,6 +188,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         # zhanlu_change end
+# zhanlu_change start - propagate formal/development independently of the version shape
+        --release-kind)
+            RELEASE_KIND="$2"
+            shift 2
+            ;;
+# zhanlu_change end
         --release-version)
             RELEASE_VERSION="$2"
             shift 2
@@ -228,6 +238,16 @@ if [[ -n "${REQUEST_ID}" && ! "${REQUEST_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,12
     print_error "--request-id 格式不正确"
     exit 1
 fi
+
+# zhanlu_change start - every fan-out has one stable identity and an explicit package channel
+if [[ "${RELEASE_KIND}" != "formal" && "${RELEASE_KIND}" != "development" ]]; then
+    print_error "--release-kind must be formal or development"
+    exit 1
+fi
+if [[ -z "${REQUEST_ID}" ]]; then
+    REQUEST_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+fi
+# zhanlu_change end
 
 # 检查 gh CLI
 check_gh_cli() {
@@ -435,32 +455,15 @@ ensure_release_target() {
 # zhanlu_change end
 
 # 使用 repository_dispatch 触发
+# zhanlu_change start - preserve all-platform dispatch while retaining exact run IDs
 trigger_dispatch() {
-    print_info "使用 repository_dispatch 触发 stable 构建..."
-    
     if [[ "$PLATFORM" != "all" ]]; then
-        print_warning "repository_dispatch 模式会触发所有平台，--platform 参数将被忽略"
+        print_warning "--dispatch selects all platforms; --platform is ignored"
     fi
-
-    if [[ "$DRY_RUN" == true ]]; then
-        print_info "将 POST repos/${REPO}/dispatches：event_type=stable，client_payload.source_branch=${SOURCE_BRANCH}，client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}，client_payload.release_version=${RELEASE_VERSION}，client_payload.version_time_patch=${VERSION_TIME_PATCH}" # zhanlu_change
-    else
-        print_info "执行: gh api repos/${REPO}/dispatches（含 client_payload.source_branch=${SOURCE_BRANCH}, client_payload.zhanlu_core_ref=${ZHANLU_CORE_REF}, client_payload.release_version=${RELEASE_VERSION}, client_payload.version_time_patch=${VERSION_TIME_PATCH}）" # zhanlu_change
-        python3 -c "import json,sys; payload={'event_type':'stable','client_payload':{'source_branch':sys.argv[1],'release_version':sys.argv[3]}}; \
-if len(sys.argv) > 2 and sys.argv[2]: payload['client_payload']['zhanlu_core_ref']=sys.argv[2]; \
-if len(sys.argv) > 4 and sys.argv[4]: payload['client_payload']['version_time_patch']=sys.argv[4]; \
-payload['client_payload'].update({'delivery_profile':sys.argv[5],'source_ref':sys.argv[1],'source_commit':sys.argv[6],'profile_digest':sys.argv[7],'assets_repository':sys.argv[8],'bundle_codex_runtime':sys.argv[9]}); \
-print(json.dumps(payload))" "${SOURCE_BRANCH}" "${ZHANLU_CORE_REF}" "${RELEASE_VERSION}" "${VERSION_TIME_PATCH}" \
-            "${DELIVERY_PROFILE}" "${ZHANLU_DELIVERY_SOURCE_COMMIT}" "${ZHANLU_DELIVERY_PROFILE_DIGEST}" "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" "${ZHANLU_BUNDLE_CODEX_RUNTIME}" \
-            | gh api "repos/${REPO}/dispatches" --method POST --input -
-    fi
-
-    if [[ "$DRY_RUN" != true ]]; then
-        print_success "已触发 repository_dispatch 事件"
-        print_info "所有平台的 stable 工作流将开始执行"
-        print_info "查看进度: https://github.com/${REPO}/actions"
-    fi
+    PLATFORM="all"
+    trigger_workflow
 }
+# zhanlu_change end
 
 # 使用 workflow_dispatch 触发
 trigger_workflow() {
@@ -569,11 +572,42 @@ PY
         fi
     done
 
+    # zhanlu_change start - publish once, only after every selected platform succeeds
+    local npm_run_json="null"
+    if [[ "$GENERATE_ONLY" != true && "$DELIVERY_PROFILE" == "default" && ${#failed_workflows[@]} -eq 0 ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+            print_info "[DRY-RUN] publish-package.yml waits for selected platform run IDs; release_kind=${RELEASE_KIND}, source_commit=${ZHANLU_DELIVERY_SOURCE_COMMIT}"
+        else
+            local npm_payload npm_response npm_run_id npm_run_url
+            npm_payload="$(jq -cn --arg ref "${WORKFLOW_REF}" --arg version "${RELEASE_VERSION}" \
+                --arg kind "${RELEASE_KIND}" --arg source "${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
+                --arg request "${REQUEST_ID}" --argjson runs "${runs_json}" \
+                '{ref:$ref,inputs:{release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson)}}')"
+            npm_run_id="" npm_run_url=""
+            if npm_response="$(gh api "repos/${REPO}/actions/workflows/publish-package.yml/dispatches" \
+                --method POST -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2026-03-10" --input - <<<"${npm_payload}")"; then
+                npm_run_id="$(jq -r '.workflow_run_id // .workflow_run.id // empty' <<<"${npm_response}" 2>/dev/null || true)"
+                npm_run_url="$(jq -r '.html_url // .workflow_run.html_url // .url // empty' <<<"${npm_response}" 2>/dev/null || true)"
+            fi
+            if [[ -z "${npm_run_id}" || -z "${npm_run_url}" ]]; then
+                print_error "Package dispatch returned no exact run ID/URL; refusing to guess"
+                failed_workflows+=("publish-package.yml")
+            else
+                npm_run_json="$(jq -cn --argjson runId "${npm_run_id}" --arg url "${npm_run_url}" '{workflow:"publish-package.yml",runId:$runId,url:$url}')"
+                print_success "Package publication dispatched: ${npm_run_url}"
+            fi
+        fi
+    fi
+    # zhanlu_change end
+
     if [[ "$DRY_RUN" != true ]]; then
         print_info "查看进度: https://github.com/${REPO}/actions"
         if [[ "${OUTPUT_FORMAT}" == "json" ]]; then
-            jq -cn --arg requestId "${REQUEST_ID}" --argjson runs "${runs_json}" \
-                '{schemaVersion:"v1",requestId:($requestId|select(length>0)),runs:$runs}'
+            # zhanlu_change start - keep platform runs compatible and add an optional package run
+            jq -cn --arg requestId "${REQUEST_ID}" --argjson runs "${runs_json}" --argjson npmRun "${npm_run_json}" \
+                '{schemaVersion:"v1",requestId:$requestId,runs:$runs} + (if $npmRun == null then {} else {npmRun:$npmRun} end)'
+            # zhanlu_change end
         fi
     fi
     # zhanlu_change start - a timed-out dispatch may still have started, so recovery stays manual
