@@ -62,7 +62,8 @@ jobs:
   publish:
     needs: wait
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Sequential package publication includes bounded registry propagation waits.
+    timeout-minutes: 180
     permissions:
       contents: read
       id-token: write
