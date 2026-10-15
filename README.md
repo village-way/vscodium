@@ -37,6 +37,8 @@ Configure `RELEASE_METADATA_ASSET` with the existing delivery metadata asset
 filename. The source supplies `scripts/npm-package-runtime.mjs` and
 `scripts/publish-npm-package.sh` under `SOURCE_SUBDIR`. The source read App and
 repository variables are shared with the platform builds.
+The runtime helper must declare `publication-format=1`; older sources stop
+before publication rather than ignoring the prepare/publish phases.
 
 The npm package's Trusted Publisher must authorize this owner/repository and
 `publish-package.yml`, allowing direct publication and dist-tag management.
@@ -48,6 +50,11 @@ Retry the package Action against the original platform run IDs after correcting
 a failed platform or npm permission. Existing matching package content is reused
 and channel promotion is repaired. An immutable version with different content
 is rejected, and older releases do not move installation channels backwards.
+Before the first npm write, the publication job preserves the complete public
+tarball bundle for seven days. Retries of the same Action restore those exact
+bytes and verify the pinned source, version, channel and every package digest.
+Only prepared public packages are stored; source checkouts are excluded. Expired
+or ambiguous publication artifacts stop recovery.
 If the workflow was updated after the platform batch started, set
 `platform_workflow_commit` to that batch's original workflow SHA while preserving
 its request ID and run IDs. The release lookup includes drafts by matching the
