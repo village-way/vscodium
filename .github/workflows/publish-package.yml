@@ -66,6 +66,7 @@ jobs:
     timeout-minutes: 180
     permissions:
       contents: read
+      actions: read
       id-token: write
     concurrency:
       group: npm-package-publication
@@ -100,9 +101,43 @@ jobs:
       - name: Read pinned package runtime
         id: runtime
         run: node "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/npm-package-runtime.mjs" >> "$GITHUB_OUTPUT"
+      - name: Verify publication contract
+        env:
+          PUBLICATION_FORMAT: ${{ steps.runtime.outputs.publication-format }}
+        run: test "$PUBLICATION_FORMAT" = 1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: ${{ steps.runtime.outputs.bun-version }}
       - run: npm install --global npm@11.21.0
+      - name: Find preserved publication
+        id: bundle
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/package-artifact.mjs
+      - name: Restore preserved publication
+        if: steps.bundle.outputs.artifact-id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.bundle.outputs.artifact-id }}
+          path: package-publication
+          merge-multiple: true
+      - name: Prepare verified publication
+        id: prepare
+        env:
+          PACKAGE_PUBLICATION_PHASE: prepare
+          PACKAGE_PUBLICATION_DIR: ${{ github.workspace }}/package-publication
+        run: bash "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/publish-npm-package.sh"
+      - name: Preserve verified publication
+        if: steps.prepare.outputs.bundle-created == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: package-publication-${{ github.run_id }}
+          path: package-publication/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
       - name: Publish verified package with OIDC
+        env:
+          PACKAGE_PUBLICATION_PHASE: publish
+          PACKAGE_PUBLICATION_DIR: ${{ github.workspace }}/package-publication
         run: bash "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/publish-npm-package.sh"
