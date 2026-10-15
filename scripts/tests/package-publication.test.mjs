@@ -10,6 +10,17 @@ const context = { repository: 'example/build', sourceCommit: 'a'.repeat(40), wor
 const detail = (run, status = 'completed', conclusion = 'success') => ({ id: run.runId, repository: { full_name: context.repository }, path: `.github/workflows/${run.workflow}`, event: 'workflow_dispatch', head_sha: context.workflowCommit, display_title: `${run.workflow.replace('.yml', '')} · ${context.version} · ${context.requestId}`, status, conclusion });
 const metadata = { releaseVersion: context.version, sourceCommit: context.sourceCommit, deliveryProfile: 'default', assetsRepository: context.repository };
 
+test('draft verification has push access while only publication has OIDC permission', () => {
+  const workflow = fs.readFileSync(new URL('../../.github/workflows/publish-package.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  const [, wait, publish] = workflow.split(/\n  (?:wait|publish):\n/);
+  assert.match(wait, /contents: write/);
+  assert.match(wait, /actions: read/);
+  assert.doesNotMatch(wait, /id-token:/);
+  assert.match(publish, /contents: read/);
+  assert.match(publish, /id-token: write/);
+  assert.doesNotMatch(publish, /contents: write/);
+});
+
 test('waits for every selected platform and then validates the fixed release source', async () => {
   let completed = false;
   let metadataRead = false;
