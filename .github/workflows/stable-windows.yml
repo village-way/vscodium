@@ -47,6 +47,13 @@ on:
         default: '0'
         options: ['0', '1']
       # zhanlu_change end
+      companion_commit:
+        type: string
+        description: Exact optional companion source commit
+      release_kind:
+        type: choice
+        default: development
+        options: [development, formal]
       release_version:
         type: string
         description: Release/tag version to publish (optional)
@@ -571,3 +578,17 @@ jobs:
   # zhanlu_change start - upstream also publishes to WinGet from this workflow; this fork distributes the
   # signed installers through its own channels, so that job is not carried here.
   # zhanlu_change end
+
+  companion:
+    if: ${{ (inputs.companion_commit || github.event.client_payload.companion_commit) != '' }}
+    needs: build
+    uses: ./.github/workflows/companion-artifacts.yml
+    with:
+      platform: windows
+      source_commit: ${{ inputs.source_commit || github.event.client_payload.source_commit }}
+      companion_commit: ${{ inputs.companion_commit || github.event.client_payload.companion_commit }}
+      release_version: ${{ inputs.release_version || github.event.client_payload.release_version }}
+      release_kind: ${{ inputs.release_kind || github.event.client_payload.release_kind || 'development' }}
+      generate_assets: ${{ inputs.generate_assets == true || github.event.client_payload.generate_assets == true }}
+      assets_repository: ${{ inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }}
+    secrets: inherit
