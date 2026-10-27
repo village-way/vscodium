@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { batchStatus, findRelease, validateBatch, verifyMetadata, waitForRelease } from '../wait-release-runs.mjs';
+import { releaseKind } from '../release-kind.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,13 +11,26 @@ const context = { repository: 'example/build', sourceCommit: 'a'.repeat(40), wor
 const detail = (run, status = 'completed', conclusion = 'success') => ({ id: run.runId, repository: { full_name: context.repository }, path: `.github/workflows/${run.workflow}`, event: 'workflow_dispatch', head_sha: context.workflowCommit, display_title: `${run.workflow.replace('.yml', '')} · ${context.version} · ${context.requestId}`, status, conclusion });
 const metadata = { releaseVersion: context.version, sourceCommit: context.sourceCommit, deliveryProfile: 'default', assetsRepository: context.repository };
 
+test('public versions select the channel and conflicting hints fail before platform lookups', async () => {
+  for (const [version, expected] of [['1.7.1', 'formal'], ['1.7.9999', 'formal'], ['1.7.10001', 'development'], ['1.7.17192', 'development'], ['1.5.167128', 'development'], ['1.7.1-insider', 'development']]) {
+    assert.equal(releaseKind(version), expected);
+    assert.doesNotThrow(() => validateBatch({ ...context, version, kind: 'auto' }));
+  }
+  for (const [version, kind] of [['1.7.1', 'development'], ['1.7.17192', 'formal']]) {
+    await assert.rejects(waitForRelease({ ...context, version, kind }, async () => assert.fail('must not contact GitHub on a channel conflict')), /conflicts with public version/);
+  }
+  for (const version of ['1.7', '1.7.01', '1.7.1;echo', '1.7.1-beta']) assert.throws(() => releaseKind(version), /public release version/);
+});
+
 test('draft verification has push access while only publication has OIDC permission', () => {
   const workflow = fs.readFileSync(new URL('../../.github/workflows/publish-package.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   const [, wait, publish] = workflow.split(/\n  (?:wait|publish):\n/);
   assert.match(wait, /contents: write/);
   assert.match(wait, /actions: read/);
   assert.doesNotMatch(wait, /id-token:/);
+  assert.match(wait, /release-kind: \$\{\{ steps\.verify\.outputs\.release-kind \}\}/);
   assert.match(publish, /contents: read/);
+  assert.match(publish, /RELEASE_KIND: \$\{\{ needs\.wait\.outputs\.release-kind \}\}/);
   assert.match(publish, /id-token: write/);
   assert.doesNotMatch(publish, /contents: write/);
 });
@@ -82,6 +96,7 @@ test('release entry dispatches the selected batch and SDK with the same source a
     fs.mkdirSync(path.join(root, 'bin'));
     const trigger = new URL('../trigger-stable-release.sh', import.meta.url);
     fs.copyFileSync(trigger, path.join(root, 'scripts/trigger-stable-release.sh'));
+    fs.copyFileSync(new URL('../release-kind.mjs', import.meta.url), path.join(root, 'scripts/release-kind.mjs'));
     fs.writeFileSync(path.join(root, 'scripts/resolve-release-delivery-profile.sh'), `resolve_release_delivery_profile() { export ZHANLU_DELIVERY_SOURCE_COMMIT=${'a'.repeat(40)} ZHANLU_DELIVERY_PROFILE_DIGEST=${'d'.repeat(64)} ZHANLU_DELIVERY_ASSETS_REPOSITORY=example/build; }\nprepare_release_delivery_profile() { resolve_release_delivery_profile; }\n`);
     fs.writeFileSync(path.join(root, 'create-release.sh'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
     fs.writeFileSync(path.join(root, 'bin/gh'), `#!/usr/bin/env bash
@@ -104,15 +119,16 @@ case "$*" in
 esac
 `, { mode: 0o755 });
     const log = path.join(root, 'dispatch.jsonl');
-    const run = (args) => {
+    const run = (args, success = true) => {
       fs.writeFileSync(log, '');
       const result = spawnSync('bash', ['./scripts/trigger-stable-release.sh', '--workflow-ref', 'develop', '--release-version', '1.6.4', '--request-id', 'request-1', '--output', 'json', ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`, MOCK_DISPATCH_LOG: log, SOURCE_REPOSITORY: 'example/source', SOURCE_SUBDIR: 'packaging' } });
-      assert.equal(result.status, 0, result.stderr + result.stdout);
+      if (success) assert.equal(result.status, 0, result.stderr + result.stdout);
+      else assert.notEqual(result.status, 0, result.stderr + result.stdout);
       const calls = fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
       const document = result.stdout.split('\n').filter(line => line.startsWith('{')).map(JSON.parse).at(-1);
       return { calls, document };
     };
-    const formal = run(['--workflow', '--platform', 'all', '--release-kind', 'formal']);
+    const formal = run(['--workflow', '--platform', 'all', '--release-kind', 'formal', '--version-time-patch', '7192']);
     assert.equal(formal.calls.length, 4);
     const packageInputs = formal.calls.at(-1).inputs;
     assert.equal(packageInputs.release_kind, 'formal');
@@ -121,7 +137,11 @@ esac
     assert.equal(formal.document.npmRun.runId, 4);
     const single = run(['--workflow', '--platform', 'linux']);
     assert.equal(single.calls.length, 2);
-    assert.equal(single.calls.at(-1).inputs.release_kind, 'development');
+    assert.equal(single.calls.at(-1).inputs.release_kind, 'formal');
+    const development = run(['--workflow', '--platform', 'linux', '--release-version', '1.7.17192']);
+    assert.equal(development.calls.at(-1).inputs.release_kind, 'development');
+    const conflict = run(['--workflow', '--platform', 'all', '--release-kind', 'development'], false);
+    assert.equal(conflict.calls.length, 0);
     for (const args of [['--workflow', '--platform', 'linux', '--generate'], ['--workflow', '--platform', 'linux', '--delivery-profile', 'customer']]) {
       const skipped = run(args);
       assert.equal(skipped.calls.length, 1);

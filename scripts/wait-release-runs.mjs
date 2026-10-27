@@ -1,11 +1,12 @@
 // Verify a pinned release batch before allowing its package publication.
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { releaseKind } from './release-kind.mjs';
 
 const workflows = new Set(['stable-macos.yml', 'stable-linux.yml', 'stable-windows.yml']);
 export function validateBatch(context) {
   if (!/^[0-9a-f]{40}$/.test(context.sourceCommit) || !/^[0-9a-f]{40}$/.test(context.workflowCommit) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(context.requestId)) throw new Error('Invalid release identity');
-  if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(context.version) || !['formal', 'development'].includes(context.kind)) throw new Error('Invalid release version or kind');
+  releaseKind(context.version, context.kind);
   if (!Array.isArray(context.runs) || !context.runs.length || context.runs.length > 3) throw new Error('Missing selected platform runs');
   if (new Set(context.runs.map(run => run.workflow)).size !== context.runs.length || new Set(context.runs.map(run => run.runId)).size !== context.runs.length) throw new Error('Duplicate platform runs');
   for (const run of context.runs) if (!workflows.has(run.workflow) || !Number.isSafeInteger(run.runId) || run.runId <= 0) throw new Error('Invalid platform run');
@@ -61,5 +62,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     return response.json();
   };
   await waitForRelease(context, api);
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `release-kind=${releaseKind(context.version, context.kind)}\n`);
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `All selected platform runs succeeded for ${context.version}.\n\n` + context.runs.map(run => `- [${run.workflow}](https://github.com/${context.repository}/actions/runs/${run.runId})`).join('\n') + '\n');
 }

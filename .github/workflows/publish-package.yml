@@ -8,8 +8,10 @@ on:
         required: true
       release_kind:
         type: choice
-        required: true
-        options: [formal, development]
+        description: Derived from the public version; explicit hints must match
+        default: auto
+        required: false
+        options: [auto, formal, development]
       source_commit:
         type: string
         required: true
@@ -30,7 +32,7 @@ permissions:
 
 env:
   RELEASE_VERSION: ${{ inputs.release_version }}
-  RELEASE_KIND: ${{ inputs.release_kind }}
+  RELEASE_KIND: ${{ inputs.release_kind || 'auto' }}
   SOURCE_COMMIT: ${{ inputs.source_commit }}
   REQUEST_ID: ${{ inputs.request_id }}
   PLATFORM_RUNS: ${{ inputs.platform_runs }}
@@ -41,6 +43,8 @@ jobs:
   wait:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      release-kind: ${{ steps.verify.outputs.release-kind }}
     permissions:
       # Draft release listings require push access, even for metadata reads.
       contents: write
@@ -54,6 +58,7 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - name: Verify selected platform publications
+        id: verify
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_METADATA_ASSET: ${{ vars.RELEASE_METADATA_ASSET }}
@@ -62,6 +67,8 @@ jobs:
   publish:
     needs: wait
     runs-on: ubuntu-latest
+    env:
+      RELEASE_KIND: ${{ needs.wait.outputs.release-kind }}
     # Sequential package publication includes bounded registry propagation waits.
     timeout-minutes: 180
     permissions:
