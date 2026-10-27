@@ -16,7 +16,7 @@
 #   --source-branch    zhanlu-code 仓库分支，默认 develop（workflow_dispatch / repository_dispatch）
 #   --zhanlu-core-ref 根目录布局下单独指定内核分支或 commit；SOURCE_SUBDIR 布局下内核与构建树同源，只能留空或等于 --source-branch # zhanlu_change
 #   --bundle-codex-runtime 是否打包 Codex CLI runtime，0 或 1，默认 0
-#   --release-kind     formal or development (default development) # zhanlu_change
+#   --release-kind     auto, formal or development (default auto; derived from public version) # zhanlu_change
 #   --release-version  指定要发布的 release/tag；默认自动解析一次并传给所有 workflow
 #   --dry-run       仅显示将要执行的命令，不实际执行
 #   --help          显示帮助信息
@@ -51,7 +51,7 @@ VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
 REQUEST_ID=""
 OUTPUT_FORMAT="text"
 # zhanlu_change start - release kind selects the npm channel explicitly
-RELEASE_KIND="development"
+RELEASE_KIND="auto"
 # zhanlu_change end
 
 # 颜色输出
@@ -240,8 +240,8 @@ if [[ -n "${REQUEST_ID}" && ! "${REQUEST_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,12
 fi
 
 # zhanlu_change start - every fan-out has one stable identity and an explicit package channel
-if [[ "${RELEASE_KIND}" != "formal" && "${RELEASE_KIND}" != "development" ]]; then
-    print_error "--release-kind must be formal or development"
+if [[ "${RELEASE_KIND}" != "auto" && "${RELEASE_KIND}" != "formal" && "${RELEASE_KIND}" != "development" ]]; then
+    print_error "--release-kind must be auto, formal or development"
     exit 1
 fi
 if [[ -z "${REQUEST_ID}" ]]; then
@@ -409,6 +409,9 @@ resolve_release_version() {
         print_error "内部版本补丁号格式不正确: ${VERSION_TIME_PATCH}"
         exit 1
     fi
+
+    # Derive the channel before any release mutation.
+    RELEASE_KIND="$(node ./scripts/release-kind.mjs "${RELEASE_VERSION}" "${RELEASE_KIND}")"
 
     print_info "Release 版本: ${RELEASE_VERSION}"
     if [[ -n "${VERSION_TIME_PATCH}" ]]; then
