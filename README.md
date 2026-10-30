@@ -60,3 +60,16 @@ If the workflow was updated after the platform batch started, set
 its request ID and run IDs. The release lookup includes drafts by matching the
 exact tag in the paginated releases list; GitHub's tag endpoint returns published
 releases only.
+
+## Optional companion artifacts
+
+The stable platform workflows accept an optional exact `companion_commit`. The
+configured `COMPANION_REPOSITORY` must be private and included in the source
+App's repository permissions. Build logic remains in the pinned private source.
+An empty commit keeps the existing platform flow.
+
+Development builds use the hosted platform runners. Formal native signing needs
+provisioned signing identities: set `COMPANION_MACOS_RUNNER` or
+`COMPANION_WINDOWS_RUNNER` to the appropriate signing runner label, and supply
+the corresponding `COMPANION_*` signing identity/profile secrets. Formal builds
+retain the private implementation's source licensing and native signature gates.

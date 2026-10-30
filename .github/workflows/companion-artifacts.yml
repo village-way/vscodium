@@ -1,0 +1,132 @@
+name: companion-artifacts
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        type: string
+        required: true
+      source_commit:
+        type: string
+        required: true
+      companion_commit:
+        type: string
+        required: true
+      release_version:
+        type: string
+        required: true
+      release_kind:
+        type: string
+        default: development
+      generate_assets:
+        type: boolean
+        default: false
+      assets_repository:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.platform == 'macos' && '[{"runner":"macos-15","target":"macos","container":""}]' || inputs.platform == 'windows' && '[{"runner":"windows-2025","target":"windows","container":""}]' || '[{"runner":"ubuntu-24.04","target":"linux-x64","container":"python:3.11-bullseye"},{"runner":"ubuntu-24.04-arm","target":"linux-arm64","container":"python:3.11-bullseye"}]') }}
+    runs-on: ${{ matrix.target == 'macos' && vars.COMPANION_MACOS_RUNNER || matrix.target == 'windows' && vars.COMPANION_WINDOWS_RUNNER || matrix.runner }}
+    container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
+    steps:
+      - name: Prepare native build tools
+        if: startsWith(matrix.target, 'linux-')
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git curl ca-certificates build-essential pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Validate immutable build inputs
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          COMPANION_COMMIT: ${{ inputs.companion_commit }}
+          BUILD_KIND: ${{ inputs.release_kind }}
+          BUILD_PLATFORM: ${{ inputs.platform }}
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ && "$COMPANION_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUILD_KIND" == development || "$BUILD_KIND" == formal ]]
+          [[ "$BUILD_PLATFORM" == macos || "$BUILD_PLATFORM" == windows || "$BUILD_PLATFORM" == linux ]]
+      - name: Create source read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
+          permission-contents: read
+      - name: Checkout pinned build implementation
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ vars.SOURCE_REPOSITORY }}
+          ref: ${{ inputs.source_commit }}
+          token: ${{ steps.source-token.outputs.token }}
+          persist-credentials: false
+          path: source
+      - name: Checkout pinned companion
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ vars.COMPANION_REPOSITORY }}
+          ref: ${{ inputs.companion_commit }}
+          token: ${{ steps.source-token.outputs.token }}
+          persist-credentials: false
+          path: companion
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: ${{ !startsWith(matrix.target, 'linux-') }}
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Read pinned toolchain
+        id: runtime
+        run: python -c 'import tomllib; print("rust=" + tomllib.load(open("companion/libs/cua-driver/rust/rust-toolchain.toml", "rb"))["toolchain"]["channel"])' >> "$GITHUB_OUTPUT"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: ${{ steps.runtime.outputs.rust }}
+          cache: false
+          rustflags: ''
+      - name: Build companion archives
+        env:
+          COMPANION_COMMIT: ${{ inputs.companion_commit }}
+          COMPANION_KIND: ${{ inputs.release_kind }}
+          COMPANION_TARGET: ${{ matrix.target }}
+          COMPANION_MACOS_SIGNING_IDENTITY: ${{ secrets.COMPANION_MACOS_SIGNING_IDENTITY }}
+          COMPANION_MACOS_NOTARY_PROFILE: ${{ secrets.COMPANION_MACOS_NOTARY_PROFILE }}
+          COMPANION_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.COMPANION_WINDOWS_CERTIFICATE_THUMBPRINT }}
+        run: python "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/build-companion.py" --source companion --commit "$COMPANION_COMMIT" --platform "$COMPANION_TARGET" --kind "$COMPANION_KIND" --output assets
+      - name: Publish companion archives
+        if: ${{ !inputs.generate_assets }}
+        env:
+          GH_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: python "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/build-companion.py" --publish assets
+      - name: Encrypt delivery artifact
+        if: inputs.generate_assets
+        env:
+          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+        run: bash scripts/protect-delivery-artifact.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: inputs.generate_assets
+        with:
+          name: companion-${{ matrix.target }}
+          path: delivery-assets.tar.enc
+          if-no-files-found: error
+          retention-days: 3

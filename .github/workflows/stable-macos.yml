@@ -47,6 +47,13 @@ on:
         default: '0'
         options: ['0', '1']
       # zhanlu_change end
+      companion_commit:
+        type: string
+        description: Exact optional companion source commit
+      release_kind:
+        type: choice
+        default: development
+        options: [development, formal]
       release_version:
         type: string
         description: Release/tag version to publish (optional)
@@ -108,7 +115,7 @@ jobs:
       - name: Create source read token
         id: source-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
-        with: &source-read-inputs
+        with:
           client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
           private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
@@ -238,3 +245,17 @@ jobs:
           then
             security delete-keychain $KEYCHAIN
           fi
+
+  companion:
+    if: ${{ (inputs.companion_commit || github.event.client_payload.companion_commit) != '' }}
+    needs: build
+    uses: ./.github/workflows/companion-artifacts.yml
+    with:
+      platform: macos
+      source_commit: ${{ inputs.source_commit || github.event.client_payload.source_commit }}
+      companion_commit: ${{ inputs.companion_commit || github.event.client_payload.companion_commit }}
+      release_version: ${{ inputs.release_version || github.event.client_payload.release_version }}
+      release_kind: ${{ inputs.release_kind || github.event.client_payload.release_kind || 'development' }}
+      generate_assets: ${{ inputs.generate_assets == true || github.event.client_payload.generate_assets == true }}
+      assets_repository: ${{ inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }}
+    secrets: inherit
