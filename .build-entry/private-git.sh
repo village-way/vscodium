@@ -60,7 +60,9 @@ if ! printf '%s\n' "$PRIVATE_SOURCE_DEPLOY_KEY" | "$ssh_add" - >/dev/null 2>&1; 
 fi
 unset PRIVATE_SOURCE_DEPLOY_KEY
 printf -v quoted_hosts '%q' "$transport_dir/known_hosts"
-export GIT_SSH_COMMAND="${ssh_binary} -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=20 -o ServerAliveCountMax=2 -o UserKnownHostsFile=${quoted_hosts} -p 443"
+export GIT_SSH_COMMAND="\"${ssh_binary}\" -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=20 -o ServerAliveCountMax=2 -o UserKnownHostsFile=${quoted_hosts} -p 443"
+# Git for Windows cannot reliably infer the variant from an MSYS command path.
+export GIT_SSH_VARIANT=ssh
 export GIT_TERMINAL_PROMPT=0
 
 # Rewrite only this exact repository, within this process; never persist credentials/config.

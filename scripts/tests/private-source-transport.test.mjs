@@ -96,6 +96,28 @@ test('public repository visibility is refused before loading any private key', t
   assert.equal((result.stdout + result.stderr).includes('unexpected-agent-start'), false);
 });
 
+test('custom SSH clients require explicit OpenSSH port semantics', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'private-ssh-variant-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const remote = path.join(directory, 'remote.git');
+  git(directory, 'init', '--bare', '--quiet', remote);
+  const client = path.join(directory, 'custom SSH client.sh');
+  fs.writeFileSync(client, '#!/bin/sh\ncase " $* " in *" -G "*) exit 1;; esac\nexec git upload-pack "$PRIVATE_TEST_REMOTE"\n', { mode: 0o755 });
+  const env = {
+    ...process.env, PRIVATE_TEST_REMOTE: remote.replaceAll('\\', '/'),
+    GIT_SSH_COMMAND: `"${client.replaceAll('\\', '/')}"`,
+  };
+  delete env.GIT_SSH_VARIANT;
+  const args = ['ls-remote', 'ssh://git@ssh.github.com:443/example/private.git'];
+  const automatic = spawnSync('git', args, { cwd: directory, env, encoding: 'utf8' });
+  assert.notEqual(automatic.status, 0);
+  assert.match(automatic.stderr, /variant 'simple' does not support setting port/);
+  const transport = fs.readFileSync(path.join(root, '.build-entry/private-git.sh'), 'utf8');
+  const variant = transport.match(/^export GIT_SSH_VARIANT=(\w+)$/m)?.[1];
+  const explicit = spawnSync('git', args, { cwd: directory, env: { ...env, GIT_SSH_VARIANT: variant }, encoding: 'utf8' });
+  assert.equal(explicit.status, 0, explicit.stderr);
+});
+
 test('all stable source producers and consumers choose private storage exclusively when selected', () => {
   let uploads = 0, downloads = 0;
   for (const platform of ['macos', 'linux', 'windows']) {
