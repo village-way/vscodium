@@ -12,7 +12,10 @@ const SHA1 = /^[a-f0-9]{40}$/;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 function git(cwd, args) {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const repository = process.env.PRIVATE_SOURCE_REPOSITORY;
+  const scoped = repository && process.env.PRIVATE_SOURCE_TRANSPORT_VERIFIED === repository;
+  const config = scoped ? ['-c', `url.ssh://git@ssh.github.com:443/${repository}.git.insteadOf=https://github.com/${repository}.git`] : [];
+  const result = spawnSync('git', [...config, ...args], { cwd, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   if (result.status !== 0) {
     throw new Error(`Private artifact Git operation failed: ${args[0]}`);
   }

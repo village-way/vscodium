@@ -25,7 +25,6 @@ if [[ "$private_status" != '404' ]]; then
   exit 1
 fi
 
-transport_dir="$(mktemp -d)"
 agent_started=false
 ssh_agent=ssh-agent
 ssh_add=ssh-add
@@ -44,6 +43,7 @@ for transport_tool in "$ssh_agent" "$ssh_add" "$ssh_binary"; do
     exit 1
   fi
 done
+transport_dir="$(mktemp -d)"
 cleanup() {
   if [[ "$agent_started" == true ]]; then
     "$ssh_agent" -k >/dev/null 2>&1 || true
@@ -73,11 +73,14 @@ export GIT_SSH_COMMAND="\"${ssh_binary}\" -F /dev/null -o BatchMode=yes -o Stric
 export GIT_SSH_VARIANT=ssh
 export GIT_TERMINAL_PROMPT=0
 
-# Rewrite only this exact repository, within this process; never persist credentials/config.
-config_index="${GIT_CONFIG_COUNT:-0}"
-export "GIT_CONFIG_KEY_${config_index}=url.ssh://git@ssh.github.com:443/${repository}.git.insteadOf"
-export "GIT_CONFIG_VALUE_${config_index}=https://github.com/${repository}.git"
-export GIT_CONFIG_COUNT="$((config_index + 1))"
-git ls-remote "https://github.com/${repository}.git" >/dev/null
+# Explicit -c also works with the older Git in supported build containers.
+# Do not persist credentials/config or depend on newer environment config APIs.
+rewrite_config="url.ssh://git@ssh.github.com:443/${repository}.git.insteadOf=https://github.com/${repository}.git"
+git -c "$rewrite_config" ls-remote "https://github.com/${repository}.git" >/dev/null
 export PRIVATE_SOURCE_TRANSPORT_VERIFIED="$repository"
-"$@"
+if [[ "$1" == 'git' ]]; then
+  shift
+  git -c "$rewrite_config" "$@"
+else
+  "$@"
+fi

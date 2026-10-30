@@ -118,6 +118,26 @@ test('custom SSH clients require explicit OpenSSH port semantics', t => {
   assert.equal(explicit.status, 0, explicit.stderr);
 });
 
+test('private store CLI applies repository rewrite per command without modern Git environment config', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'private-rewrite-test-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const remote = path.join(directory, 'remote.git');
+  git(directory, 'init', '--bare', '--quiet', remote);
+  const client = path.join(directory, 'SSH store server.sh');
+  fs.writeFileSync(client, '#!/bin/sh\ncase "$*" in *git-receive-pack*) exec git receive-pack "$PRIVATE_TEST_REMOTE";; *) exec git upload-pack "$PRIVATE_TEST_REMOTE";; esac\n', { mode: 0o755 });
+  const env = {
+    ...process.env, PRIVATE_TEST_REMOTE: remote.replaceAll('\\', '/'),
+    PRIVATE_SOURCE_REPOSITORY: identity.repository, PRIVATE_SOURCE_TRANSPORT_VERIFIED: identity.repository,
+    GITHUB_RUN_ID: identity.runId, GITHUB_SHA: identity.workflowCommit,
+    SOURCE_COMMIT: identity.sourceCommit, ZHANLU_DELIVERY_PROFILE_DIGEST: identity.profileDigest,
+    GIT_SSH_COMMAND: `"${client.replaceAll('\\', '/')}"`, GIT_SSH_VARIANT: 'ssh', GIT_TERMINAL_PROMPT: '0',
+  };
+  delete env.GIT_CONFIG_COUNT;
+  const result = spawnSync(process.execPath, [path.join(root, '.build-entry/private-source-artifact.mjs'), 'probe'], { cwd: directory, env, encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /read\/write probe passed/);
+});
+
 test('all stable source producers and consumers choose private storage exclusively when selected', () => {
   let uploads = 0, downloads = 0;
   for (const platform of ['macos', 'linux', 'windows']) {
