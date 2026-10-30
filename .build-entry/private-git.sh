@@ -27,9 +27,20 @@ fi
 
 transport_dir="$(mktemp -d)"
 agent_started=false
+ssh_agent=ssh-agent
+ssh_add=ssh-add
+ssh_binary=ssh
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    # Keep the agent and client in the same Git Bash/MSYS socket implementation.
+    ssh_agent=/usr/bin/ssh-agent
+    ssh_add=/usr/bin/ssh-add
+    ssh_binary=/usr/bin/ssh
+    ;;
+esac
 cleanup() {
   if [[ "$agent_started" == true ]]; then
-    ssh-agent -k >/dev/null 2>&1 || true
+    "$ssh_agent" -k >/dev/null 2>&1 || true
   fi
   rm -rf "$transport_dir"
 }
@@ -41,15 +52,15 @@ trap 'exit 143' TERM
 # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
 printf '%s\n' '[ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$transport_dir/known_hosts"
 unset SSH_AUTH_SOCK SSH_AGENT_PID
-eval "$(ssh-agent -s)" >/dev/null
+eval "$("$ssh_agent" -s)" >/dev/null
 agent_started=true
-if ! printf '%s\n' "$PRIVATE_SOURCE_DEPLOY_KEY" | ssh-add - >/dev/null 2>&1; then
+if ! printf '%s\n' "$PRIVATE_SOURCE_DEPLOY_KEY" | "$ssh_add" - >/dev/null 2>&1; then
   echo 'Could not load the scoped private source deploy key.' >&2
   exit 1
 fi
 unset PRIVATE_SOURCE_DEPLOY_KEY
 printf -v quoted_hosts '%q' "$transport_dir/known_hosts"
-export GIT_SSH_COMMAND="ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=20 -o ServerAliveCountMax=2 -o UserKnownHostsFile=${quoted_hosts} -p 443"
+export GIT_SSH_COMMAND="${ssh_binary} -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=20 -o ServerAliveCountMax=2 -o UserKnownHostsFile=${quoted_hosts} -p 443"
 export GIT_TERMINAL_PROMPT=0
 
 # Rewrite only this exact repository, within this process; never persist credentials/config.
