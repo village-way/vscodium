@@ -15,6 +15,9 @@ on:
       checkout_pr:
         type: string
         description: Checkout PR
+      private_source_repository:
+        type: string
+        description: Private source and intermediate storage repository (owner/name)
       source_branch:
         type: string
         description: Branch of zhanlu-code to fetch
@@ -73,6 +76,7 @@ env:
   VERSIONS_REPOSITORY: ${{ github.repository_owner }}/versions
   VSCODE_QUALITY: stable
   SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }} # zhanlu_change - build tree subdirectory inside the source repository; empty for a root layout
+  PRIVATE_SOURCE_REPOSITORY: ${{ inputs.private_source_repository || '' }}
   ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.source_ref || github.event.inputs.source_branch) || github.event.client_payload.source_ref || github.event.client_payload.source_branch || 'develop' }} # zhanlu_change
   SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_commit || github.event.client_payload.source_commit || '' }} # zhanlu_change
   ZHANLU_DELIVERY_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.delivery_profile || github.event.client_payload.delivery_profile || 'default' }} # zhanlu_change
@@ -110,6 +114,7 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
+        if: env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: &source-read-inputs
           client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
@@ -121,10 +126,18 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
+          SOURCE_REPO_URL: ${{ env.PRIVATE_SOURCE_REPOSITORY && format('https://github.com/{0}.git', env.PRIVATE_SOURCE_REPOSITORY) || vars.SOURCE_REPO_URL }}
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ env.PRIVATE_SOURCE_REPOSITORY != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
+
+      - name: Verify private intermediate transport
+        shell: bash
+        env:
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+        run: bash .build-entry/private-git.sh node .build-entry/private-source-artifact.mjs probe
+        if: env.PRIVATE_SOURCE_REPOSITORY != ''
 
       - name: Switch to relevant branch
         env:
@@ -136,7 +149,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_repo.sh
 
       - name: Check PR or cron
@@ -169,6 +182,7 @@ jobs:
     steps:
       - name: Create source read token
         id: source-token
+        if: env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
 
@@ -178,7 +192,7 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           repository: ${{ vars.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_COMMIT || env.ZHANLU_CODE_SOURCE_BRANCH }}
-          token: ${{ steps.source-token.outputs.token }}
+          token: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }}
           path: zhanlu-code-source
           sparse-checkout: ${{ env.SOURCE_SUBDIR }} # only the build tree is needed; empty checks out everything
 
@@ -188,7 +202,7 @@ jobs:
           persist-credentials: false # zhanlu_change - no tokens in Git configuration
           repository: ${{ vars.RESPONSES_BRIDGE_REPOSITORY }}
           ref: develop
-          token: ${{ steps.source-token.outputs.token }}
+          token: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }}
           path: responses-bridge-source
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -245,16 +259,17 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
-        if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+        if: (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch') && env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
+          SOURCE_REPO_URL: ${{ env.PRIVATE_SOURCE_REPOSITORY && format('https://github.com/{0}.git', env.PRIVATE_SOURCE_REPOSITORY) || vars.SOURCE_REPO_URL }}
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ env.PRIVATE_SOURCE_REPOSITORY != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -298,7 +313,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -333,7 +348,7 @@ jobs:
       - name: Build native Agent resources
         env:
           ZHANLU_SKIP_AGENT_TYPECHECK: '1' # zhanlu_change - the type check emits no packaged output
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./build_zhanlu_agent_resources.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
@@ -382,7 +397,14 @@ jobs:
           path: ./vscode.tar.gz.enc # zhanlu_change - ciphertext only
           if-no-files-found: error # zhanlu_change - never silently skip protected output
           retention-days: 1 # zhanlu_change - encrypted intermediate only
-        if: env.SHOULD_BUILD == 'yes'
+        if: (env.SHOULD_BUILD == 'yes') && env.PRIVATE_SOURCE_REPOSITORY == ''
+
+      - name: Upload private compile intermediate
+        shell: bash
+        env:
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+        run: bash .build-entry/private-git.sh node .build-entry/private-source-artifact.mjs upload vscode.tar.gz.enc
+        if: (env.SHOULD_BUILD == 'yes') && env.PRIVATE_SOURCE_REPOSITORY != ''
 
   build:
     needs:
@@ -435,28 +457,50 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
+      - name: Ensure private transport SSH tools
+        shell: bash
+        run: |
+          if command -v ssh-agent >/dev/null && command -v ssh-add >/dev/null && command -v ssh >/dev/null; then
+            exit 0
+          fi
+          installer=(apt-get)
+          if [[ "$(id -u)" != '0' ]]; then
+            installer=(sudo -n apt-get)
+          fi
+          "${installer[@]}" update
+          "${installer[@]}" install -y --no-install-recommends openssh-client
+        if: env.PRIVATE_SOURCE_REPOSITORY != '' && env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
-        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+        if: (env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')) && env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
+          SOURCE_REPO_URL: ${{ env.PRIVATE_SOURCE_REPOSITORY && format('https://github.com/{0}.git', env.PRIVATE_SOURCE_REPOSITORY) || vars.SOURCE_REPO_URL }}
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ env.PRIVATE_SOURCE_REPOSITORY != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       # zhanlu_change start - always restore the compiled Core artifact; native Agent additionally restores its source
+      - name: Download private compile intermediate
+        shell: bash
+        env:
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+        run: bash .build-entry/private-git.sh node .build-entry/private-source-artifact.mjs download vscode.tar.gz.enc
+        if: (env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes') && env.PRIVATE_SOURCE_REPOSITORY != ''
+
       - name: Download vscode artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode
-        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+        if: (env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes') && env.PRIVATE_SOURCE_REPOSITORY == ''
 
 
       - name: Authenticate and decrypt source artifact
@@ -525,7 +569,7 @@ jobs:
       - name: Refresh Agent resources for the target architecture
         env:
           ZHANLU_AGENT_RESOURCES_PREBUILT: 'yes' # zhanlu_change - the restored compile artifact already holds the arch-independent bundles
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./build_zhanlu_agent_resources.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
 
@@ -599,15 +643,16 @@ jobs:
 
       - name: Create source read token
         id: source-token
-        if: env.SHOULD_BUILD == 'yes'
+        if: (env.SHOULD_BUILD == 'yes') && env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
+          SOURCE_REPO_URL: ${{ env.PRIVATE_SOURCE_REPOSITORY && format('https://github.com/{0}.git', env.PRIVATE_SOURCE_REPOSITORY) || vars.SOURCE_REPO_URL }}
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ env.PRIVATE_SOURCE_REPOSITORY != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: ./fetch_source.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -616,7 +661,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: ./get_repo.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -638,7 +683,7 @@ jobs:
 
       - name: Prepare CLI compatibility assets
         env:
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: bash ./prepare_zhanlu_cli_assets.sh
         if: env.SHOULD_BUILD == 'yes'
 
@@ -707,16 +752,17 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
-        if: env.DISABLED != 'yes'
+        if: (env.DISABLED != 'yes') && env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
+          SOURCE_REPO_URL: ${{ env.PRIVATE_SOURCE_REPOSITORY && format('https://github.com/{0}.git', env.PRIVATE_SOURCE_REPOSITORY) || vars.SOURCE_REPO_URL }}
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ env.PRIVATE_SOURCE_REPOSITORY != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
         if: env.DISABLED != 'yes'
 
@@ -769,11 +815,18 @@ jobs:
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
       # Always restore the compiled Core artifact; native Agent additionally restores its source.
+      - name: Download private compile intermediate
+        shell: bash
+        env:
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+        run: bash .build-entry/private-git.sh node .build-entry/private-source-artifact.mjs download vscode.tar.gz.enc
+        if: (env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')) && env.PRIVATE_SOURCE_REPOSITORY != ''
+
       - name: Download vscode artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode
-        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+        if: (env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')) && env.PRIVATE_SOURCE_REPOSITORY == ''
 
 
       - name: Authenticate and decrypt source artifact
@@ -793,7 +846,7 @@ jobs:
 
       - name: Build the native Agent CLI for the target architecture
         env:
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }}
           ZHANLU_CLI_ONLY: 'yes'
         run: ./build_zhanlu_agent_resources.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
@@ -868,15 +921,17 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
+        if: env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
         with: *source-read-inputs
       # zhanlu_change end
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
+          SOURCE_REPO_URL: ${{ env.PRIVATE_SOURCE_REPOSITORY && format('https://github.com/{0}.git', env.PRIVATE_SOURCE_REPOSITORY) || vars.SOURCE_REPO_URL }}
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ env.PRIVATE_SOURCE_REPOSITORY != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
 
       - name: Switch to relevant branch
@@ -918,11 +973,18 @@ jobs:
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
 
       # Always restore the compiled Core artifact; native Agent additionally restores its source.
+      - name: Download private compile intermediate
+        shell: bash
+        env:
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+        run: bash .build-entry/private-git.sh node .build-entry/private-source-artifact.mjs download vscode.tar.gz.enc
+        if: (env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')) && env.PRIVATE_SOURCE_REPOSITORY != ''
+
       - name: Download vscode artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode
-        if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')
+        if: (env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')) && env.PRIVATE_SOURCE_REPOSITORY == ''
 
 
       - name: Authenticate and decrypt source artifact
@@ -942,7 +1004,7 @@ jobs:
 
       - name: Build the native Agent CLI for the target architecture
         env:
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }}
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }}
           ZHANLU_CLI_ONLY: 'yes'
         run: ./build_zhanlu_agent_resources.sh
         if: env.DISABLED != 'yes' && (env.SHOULD_BUILD_REH != 'no' || env.SHOULD_BUILD_REH_WEB != 'no' || github.event.inputs.generate_assets == 'true')

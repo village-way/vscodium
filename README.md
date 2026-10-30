@@ -60,3 +60,24 @@ If the workflow was updated after the platform batch started, set
 its request ID and run IDs. The release lookup includes drafts by matching the
 exact tag in the paginated releases list; GitHub's tag endpoint returns published
 releases only.
+## Optional private source transport
+
+Stable platform workflows accept `private_source_repository` (`owner/name`).
+Configure `PRIVATE_SOURCE_DEPLOY_KEY` with a read/write deploy key restricted to
+that private repository. Keep Actions disabled on the source mirror so importing
+source branches cannot execute their workflows. The normal source App path is
+unchanged when the input is empty.
+
+This mode fetches the requested immutable source commit over authenticated SSH.
+Linux and Windows compile intermediates remain encrypted and are stored only on
+`build-artifacts/<run-id>` branches in the same private repository. Chunks are
+limited to 32 MiB and pushed in bounded batches; a completion manifest binds the
+run, source commit, workflow commit, Profile digest, sizes and checksums. Consumers
+validate that manifest and every chunk before restoring the archive. A blocking
+read/write probe runs before compilation. These source intermediates are never
+uploaded to this public repository's Actions artifacts or Release assets.
+
+Intermediate branches are retained for diagnosis. Final installer assets may be
+uploaded separately to the selected draft Release. Dispatching the three platform
+workflows does not dispatch package publication; callers that prohibit registry
+publication must not invoke the default publication wrapper.

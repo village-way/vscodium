@@ -112,7 +112,15 @@ test('every source artifact upload is ciphertext and every consumer authenticate
       if (/uses: actions\/download-artifact@/.test(step) && /\n          name: vscode\s*\n/.test(step)) {
         consumers++;
         assert.match(steps[index + 1], /source-artifact\.mjs decrypt/);
-        assert.equal(step.match(/\n        if: (.+)/)?.[1], steps[index + 1].match(/\n        if: (.+)/)?.[1]);
+        const downloadCondition = step.match(/\n        if: (.+)/)?.[1];
+        const decryptCondition = steps[index + 1].match(/\n        if: (.+)/)?.[1];
+        if (downloadCondition?.includes("env.PRIVATE_SOURCE_REPOSITORY == ''")) {
+          assert.equal(downloadCondition, `(${decryptCondition}) && env.PRIVATE_SOURCE_REPOSITORY == ''`);
+          assert.match(steps[index - 1], /name: Download private compile intermediate/);
+          assert.equal(steps[index - 1].match(/\n        if: (.+)/)?.[1], `(${decryptCondition}) && env.PRIVATE_SOURCE_REPOSITORY != ''`);
+        } else {
+          assert.equal(downloadCondition, decryptCondition);
+        }
       }
       if (/uses: actions\/checkout@/.test(step)) assert.match(step, /persist-credentials: false/);
       if (/uses: actions-rust-lang\/setup-rust-toolchain@/.test(step)) assert.match(step, /cache: false/);
