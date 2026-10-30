@@ -131,6 +131,14 @@ test('all stable source producers and consumers choose private storage exclusive
       const compile = workflow.split('\n  compile:')[1].split(/\n  [A-Za-z0-9_-]+:/)[0];
       assert.match(compile, /name: Upload private compile intermediate/);
     }
+    if (platform === 'linux') {
+      const build = workflow.split('\n  build:')[1].split(/\n  [A-Za-z0-9_-]+:/)[0];
+      const prerequisites = build.indexOf('name: Ensure private transport SSH tools');
+      assert.ok(prerequisites >= 0 && prerequisites < build.indexOf('name: Fetch source code from private repository'));
+      const step = build.slice(prerequisites).split('\n      - ')[0];
+      assert.match(step, /openssh-client/);
+      assert.doesNotMatch(step, /PRIVATE_SOURCE_DEPLOY_KEY/);
+    }
     for (const step of workflow.split(/\n      - /)) {
       if (!/name: (?:vscode|Upload private compile intermediate|Download private compile intermediate)\b/.test(step)) continue;
       if (/actions\/(?:upload|download)-artifact@/.test(step)) {

@@ -38,6 +38,12 @@ case "$(uname -s)" in
     ssh_binary=/usr/bin/ssh
     ;;
 esac
+for transport_tool in "$ssh_agent" "$ssh_add" "$ssh_binary"; do
+  if ! command -v "$transport_tool" >/dev/null; then
+    echo 'Required private transport SSH tool is unavailable.' >&2
+    exit 1
+  fi
+done
 cleanup() {
   if [[ "$agent_started" == true ]]; then
     "$ssh_agent" -k >/dev/null 2>&1 || true
@@ -52,7 +58,9 @@ trap 'exit 143' TERM
 # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
 printf '%s\n' '[ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$transport_dir/known_hosts"
 unset SSH_AUTH_SOCK SSH_AGENT_PID
-eval "$("$ssh_agent" -s)" >/dev/null
+agent_environment="$("$ssh_agent" -s)"
+eval "$agent_environment" >/dev/null
+unset agent_environment
 agent_started=true
 if ! printf '%s\n' "$PRIVATE_SOURCE_DEPLOY_KEY" | "$ssh_add" - >/dev/null 2>&1; then
   echo 'Could not load the scoped private source deploy key.' >&2

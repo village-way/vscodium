@@ -457,6 +457,20 @@ jobs:
           ref: ${{ env.GITHUB_BRANCH }}
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
+      - name: Ensure private transport SSH tools
+        shell: bash
+        run: |
+          if command -v ssh-agent >/dev/null && command -v ssh-add >/dev/null && command -v ssh >/dev/null; then
+            exit 0
+          fi
+          installer=(apt-get)
+          if [[ "$(id -u)" != '0' ]]; then
+            installer=(sudo -n apt-get)
+          fi
+          "${installer[@]}" update
+          "${installer[@]}" install -y --no-install-recommends openssh-client
+        if: env.PRIVATE_SOURCE_REPOSITORY != '' && env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
