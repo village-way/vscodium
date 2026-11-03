@@ -33,6 +33,8 @@ test('native matrix includes both Linux CPUs and separate real Windows ARM64 exe
   assert.match(workflow, /needs\.windows-arm-smoke\.result == 'success'/);
   assert.match(workflow, /--distribution/);
   assert.doesNotMatch(workflow, /npm publish|publish-package\.yml|--allow-unsigned/);
+  assert.match(workflow, /https:\/\/archive\.debian\.org\//);
+  assert.doesNotMatch(workflow, /--allow-unauthenticated|trusted=yes|Check-Valid-Until.*false|Verify-Peer.*false/i);
   assert.match(workflow, /name: companion-delivery-\$\{\{ github.run_id \}\}/);
 });
 
