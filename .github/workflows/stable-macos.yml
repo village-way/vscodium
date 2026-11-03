@@ -15,6 +15,9 @@ on:
       checkout_pr:
         type: string
         description: Checkout PR
+      private_source_repository:
+        type: string
+        description: Private source and intermediate storage repository (owner/name)
       source_branch:
         type: string
         description: Branch of zhanlu-code to fetch
@@ -69,6 +72,7 @@ env:
   OS_NAME: osx
   VSCODE_QUALITY: stable
   SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }} # zhanlu_change - build tree subdirectory inside the source repository; empty for a root layout
+  PRIVATE_SOURCE_REPOSITORY: ${{ inputs.private_source_repository || '' }}
   ZHANLU_CODE_SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.source_ref || github.event.inputs.source_branch) || github.event.client_payload.source_ref || github.event.client_payload.source_branch || 'develop' }} # zhanlu_change
   SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_commit || github.event.client_payload.source_commit || '' }} # zhanlu_change
   ZHANLU_DELIVERY_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.delivery_profile || github.event.client_payload.delivery_profile || 'default' }} # zhanlu_change
@@ -107,8 +111,9 @@ jobs:
       # zhanlu_change start - short-lived source credentials with explicit read-only scope
       - name: Create source read token
         id: source-token
+        if: env.PRIVATE_SOURCE_REPOSITORY == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0; Node 24
-        with: &source-read-inputs
+        with:
           client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
           private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
@@ -118,9 +123,10 @@ jobs:
 
       - name: Fetch source code from private repository
         env:
-          SOURCE_REPO_URL: ${{ vars.SOURCE_REPO_URL }}
+          SOURCE_REPO_URL: ${{ env.PRIVATE_SOURCE_REPOSITORY && format('https://github.com/{0}.git', env.PRIVATE_SOURCE_REPOSITORY) || vars.SOURCE_REPO_URL }}
+          PRIVATE_SOURCE_DEPLOY_KEY: ${{ env.PRIVATE_SOURCE_REPOSITORY != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
           SOURCE_BRANCH: ${{ env.ZHANLU_CODE_SOURCE_BRANCH }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: ./fetch_source.sh
 
       - name: Switch to relevant branch
@@ -148,7 +154,7 @@ jobs:
         env:
           VSCODE_REPO: origin
           ZHANLU_CORE_REF: ${{ env.ZHANLU_CORE_REF }}
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: . get_repo.sh
 
       - name: Check PR or cron
@@ -165,7 +171,7 @@ jobs:
       - name: Build native Agent resources
         env:
           ZHANLU_SKIP_AGENT_TYPECHECK: '1' # zhanlu_change - the type check emits no packaged output
-          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token }} # zhanlu_change - ephemeral read-only source credential
+          ZHANLU_GITHUB_TOKEN: ${{ steps.source-token.outputs.token || secrets.GITHUB_TOKEN }} # zhanlu_change - ephemeral read-only source credential
         run: . build_zhanlu_agent_resources.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 

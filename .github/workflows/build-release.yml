@@ -1,0 +1,109 @@
+name: build-release
+on:
+  pull_request:
+    paths: ['.github/workflows/build-release.yml', '.build-entry/**', 'scripts/tests/companion-entry.test.mjs']
+  workflow_dispatch:
+    inputs:
+      release_version: {type: string, required: true, description: Exact public version}
+      source_ref: {type: string, required: true, default: develop, description: Primary source branch or commit}
+      build_companion: {type: boolean, default: false, description: Build optional native companion packages}
+      companion_ref: {type: string, default: develop, description: Independent optional source branch or commit}
+      publish_npm: {type: boolean, default: false, description: Publish both products together}
+      publication_mode: {type: choice, options: [production, test], default: production, description: Production uses latest; test requires ci1232 prerelease}
+      platform: {type: choice, options: [all, macos, windows, linux], default: all}
+      delivery_profile: {type: string, default: default}
+      generate_assets: {type: boolean, default: false, description: Artifacts only; otherwise upload to draft Release}
+      private_source_repository: {type: string, description: Optional private primary source mirror}
+      companion_repository: {type: string, description: Optional private companion mirror}
+run-name: build-release · ${{ inputs.release_version }} · ${{ github.run_id }}
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: node --test scripts/tests/companion-entry.test.mjs
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write
+    env:
+      SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
+      PRIVATE_SOURCE_REPOSITORY: ${{ inputs.private_source_repository }}
+      SOURCE_REPOSITORY: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+      COMPANION_REPOSITORY: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Find preserved request identity
+        id: preserved
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLICATION_ARTIFACT_NAME: release-input-${{ github.run_id }}
+        run: node scripts/package-artifact.mjs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: steps.preserved.outputs.artifact-id != ''
+        with:
+          artifact-ids: ${{ steps.preserved.outputs.artifact-id }}
+          path: request-input
+          merge-multiple: true
+      - uses: ./.build-entry/checkout-build-inputs
+        id: sources
+        with:
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ inputs.source_ref }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          companion-repository: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+          companion-ref: ${{ inputs.build_companion && inputs.companion_ref || '' }}
+          companion-key: ${{ inputs.companion_repository != '' && secrets.COMPANION_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ inputs.build_companion && vars.COMPANION_APP_REPOSITORIES || vars.SOURCE_APP_REPOSITORIES }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Dispatch pinned private orchestration
+        env:
+          GH_TOKEN: ${{ secrets.REPO_TOKEN || secrets.GITHUB_TOKEN }}
+          SELECTED_VERSION: ${{ inputs.release_version }}
+          SELECTED_SOURCE_REF: ${{ inputs.source_ref }}
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+          SELECTED_PROFILE: ${{ inputs.delivery_profile }}
+          SELECTED_MODE: ${{ inputs.publication_mode }}
+          BUILD_COMPANION: ${{ inputs.build_companion }}
+          PUBLISH_NPM: ${{ inputs.publish_npm }}
+          GENERATE_ASSETS: ${{ inputs.generate_assets }}
+        shell: bash
+        run: |
+          args=(--entry "$GITHUB_WORKSPACE" --source build-source --source-ref "$SELECTED_SOURCE_REF" --version "$SELECTED_VERSION" --platform "$SELECTED_PLATFORM" --profile "$SELECTED_PROFILE" --publication-mode "$SELECTED_MODE" --output release-request.json)
+          if [[ "$BUILD_COMPANION" == true ]]; then args+=(--companion companion-source); fi
+          if [[ "$PUBLISH_NPM" == true ]]; then args+=(--publish-npm); fi
+          if [[ "$GENERATE_ASSETS" == true ]]; then args+=(--generate); fi
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/release-entry.py" "${args[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-request-${{ github.run_id }}
+          path: release-request.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve immutable request inputs
+        if: always() && steps.preserved.outputs.artifact-id == '' && hashFiles('request-input/release-input.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-input-${{ github.run_id }}
+          path: request-input/release-input.json
+          if-no-files-found: error
+          retention-days: 30
