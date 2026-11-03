@@ -63,11 +63,18 @@ fs.writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify({private: pr
 process.stdout.write(process.env.FIXTURE_STATUS);
 `, {mode: 0o755});
   const script = fileURLToPath(new URL('../../.build-entry/checkout-source/verify-private.sh', import.meta.url));
+  const workspace = path.join(directory, 'container workspace');
+  const actionDirectory = path.join(workspace, '.build-entry/checkout-source');
+  mkdirSync(actionDirectory, {recursive: true});
+  writeFileSync(path.join(actionDirectory, 'verify-private.sh'), readFileSync(script));
+  const run = read('.build-entry/checkout-source/action.yml').match(/^      run: (.+)$/m)[1]
+    .replaceAll('${{ github.action_path }}', '/host-only/action');
   for (const [status, privateRepository, deployKey, accepted] of [
     ['200', 'true', 'false', true], ['200', 'false', 'true', false],
     ['403', 'false', 'true', false], ['404', 'false', 'false', false], ['404', 'false', 'true', true],
   ]) {
-    const result = spawnSync('bash', [script], {encoding: 'utf8', env: {...process.env,
+    const result = spawnSync('bash', ['-c', run], {encoding: 'utf8', env: {...process.env,
+      GITHUB_WORKSPACE: workspace, GITHUB_ACTION_PATH: '/host-only/action',
       PATH: `${bin}${path.delimiter}${process.env.PATH}`, SELECTED_REPOSITORY: 'example/private',
       VISIBILITY_TOKEN: 'fixture-token', HAS_DEPLOY_KEY: deployKey, FIXTURE_STATUS: status, FIXTURE_PRIVATE: privateRepository,
     }});

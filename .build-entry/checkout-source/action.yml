@@ -29,7 +29,7 @@ runs:
         SELECTED_REPOSITORY: ${{ inputs.repository }}
         VISIBILITY_TOKEN: ${{ inputs.token || github.token }}
         HAS_DEPLOY_KEY: ${{ inputs.deploy-key != '' }}
-      run: bash "${{ github.action_path }}/verify-private.sh"
+      run: bash "$GITHUB_WORKSPACE/.build-entry/checkout-source/verify-private.sh"
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       with:
         repository: ${{ inputs.repository }}
