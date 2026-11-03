@@ -254,15 +254,17 @@ VERSION_CLEAN="${VERSION%-insider}"
 # zhanlu_change start - pinned orchestration never creates a release commit or moves its confirmed workflow branch
 if [[ -n "${RELEASE_WORKFLOW_COMMIT:-}" ]]; then
     [[ "${RELEASE_WORKFLOW_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid workflow commit' >&2; exit 1; }
-    tag_object="$(gh api "repos/${ASSETS_REPOSITORY}/git/ref/tags/${VERSION}" 2>/dev/null || true)"
-    if [[ -n "${tag_object}" ]]; then
+    if tag_object="$(gh api "repos/${ASSETS_REPOSITORY}/git/ref/tags/${VERSION}" 2>/dev/null)"; then
         tag_commit="$(jq -r '.object.sha' <<<"${tag_object}")"
         if [[ "$(jq -r '.object.type' <<<"${tag_object}")" == tag ]]; then
             tag_commit="$(gh api "repos/${ASSETS_REPOSITORY}/git/tags/${tag_commit}" --jq '.object.sha')"
         fi
         [[ "${tag_commit}" == "${RELEASE_WORKFLOW_COMMIT}" ]] || { echo 'Release tag already belongs to another workflow commit' >&2; exit 1; }
-    else
+    elif jq -e '(.status | tostring) == "404" or .message == "Not Found"' <<<"$tag_object" >/dev/null 2>&1; then
         gh api --method POST "repos/${ASSETS_REPOSITORY}/git/refs" -f "ref=refs/tags/${VERSION}" -f "sha=${RELEASE_WORKFLOW_COMMIT}" >/dev/null
+    else
+        echo 'Release tag lookup failed; refusing to mutate references' >&2
+        exit 1
     fi
 else
 # zhanlu_change end

@@ -126,7 +126,7 @@ case "$*" in
   release\\ download*) exit 1 ;;
   release\\ view*) echo true ;;
   api\\ repos/example/build/commits/*) printf '%s\\n' "$MOCK_WORKFLOW_SHA" ;;
-  api\\ repos/example/build/git/ref/tags/*) exit 1 ;;
+  api\\ repos/example/build/git/ref/tags/*) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   api\\ --method\\ POST\\ repos/example/build/git/refs*) printf '%s\\n' "$*" >> "$MOCK_TAG_LOG"; echo '{}' ;;
   api\\ *dispatches*)
     payload="$(cat)"

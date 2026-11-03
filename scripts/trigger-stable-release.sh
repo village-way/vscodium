@@ -322,11 +322,13 @@ pin_workflow_ref() {
     [[ "$actual" == "$expected" ]] || { print_error "Workflow ref moved after confirmation"; return 1; }
     tag="build-request-${REQUEST_ID}"
     if [[ "$DRY_RUN" == true ]]; then WORKFLOW_REF="$tag"; return 0; fi
-    object="$(gh api "repos/${REPO}/git/ref/tags/${tag}" 2>/dev/null || true)"
-    if [[ -n "$object" ]]; then
+    if object="$(gh api "repos/${REPO}/git/ref/tags/${tag}" 2>/dev/null)"; then
         [[ "$(jq -r '.object.sha' <<<"$object")" == "$expected" ]] || { print_error "Request tag belongs to another workflow commit"; return 1; }
-    else
+    elif jq -e '(.status | tostring) == "404" or .message == "Not Found"' <<<"$object" >/dev/null 2>&1; then
         gh api --method POST "repos/${REPO}/git/refs" -f "ref=refs/tags/${tag}" -f "sha=${expected}" >/dev/null || return 1
+    else
+        print_error "Request tag lookup failed; refusing to mutate references"
+        return 1
     fi
     WORKFLOW_REF="$tag"
 }
