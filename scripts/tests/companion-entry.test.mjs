@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const read = (name) => readFileSync(new URL(`../../${name}`, import.meta.url), 'utf8');
@@ -43,5 +47,31 @@ test('source credentials are separate and stable compile source never enters pub
     assert.match(workflow, /SOURCE_STORAGE_REPOSITORY:/);
     assert.match(workflow, /private-source-artifact\.mjs upload/);
     assert.match(workflow, /private-source-artifact\.mjs download/);
+  }
+});
+
+test('source visibility uses scoped authentication and never accepts an inconclusive or public response', t => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'source-visibility-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const bin = path.join(directory, 'bin');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'curl'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[args.indexOf('--header') + 1] !== 'Authorization: Bearer fixture-token') process.exit(17);
+fs.writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify({private: process.env.FIXTURE_PRIVATE === 'true'}));
+process.stdout.write(process.env.FIXTURE_STATUS);
+`, {mode: 0o755});
+  const script = fileURLToPath(new URL('../../.build-entry/checkout-source/verify-private.sh', import.meta.url));
+  for (const [status, privateRepository, deployKey, accepted] of [
+    ['200', 'true', 'false', true], ['200', 'false', 'true', false],
+    ['403', 'false', 'true', false], ['404', 'false', 'false', false], ['404', 'false', 'true', true],
+  ]) {
+    const result = spawnSync('bash', [script], {encoding: 'utf8', env: {...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`, SELECTED_REPOSITORY: 'example/private',
+      VISIBILITY_TOKEN: 'fixture-token', HAS_DEPLOY_KEY: deployKey, FIXTURE_STATUS: status, FIXTURE_PRIVATE: privateRepository,
+    }});
+    assert.equal(result.status === 0, accepted, result.stderr);
+    assert.doesNotMatch(result.stdout + result.stderr, /fixture-token/);
   }
 });

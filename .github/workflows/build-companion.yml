@@ -118,8 +118,19 @@ jobs:
     container: python:3.11-bullseye
     timeout-minutes: 120
     steps:
-      - name: Install transport tools
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client python3
+      - name: Verify transport tools and use authenticated package transport
+        run: |
+          for tool in curl git ssh python3; do command -v "$tool" >/dev/null; done
+          test -s /etc/ssl/certs/ca-certificates.crt
+          python3 - <<'PY'
+          from pathlib import Path
+          files = [Path('/etc/apt/sources.list'), *Path('/etc/apt/sources.list.d').glob('*.list'), *Path('/etc/apt/sources.list.d').glob('*.sources')]
+          for file in files:
+              if file.is_file():
+                  text = file.read_text().replace('http://deb.debian.org/', 'https://deb.debian.org/').replace('http://security.debian.org/', 'https://security.debian.org/')
+                  file.write_text(text)
+          Path('/etc/apt/apt.conf.d/99-ci-update-errors').write_text('APT::Update::Error-Mode "any";\n')
+          PY
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
