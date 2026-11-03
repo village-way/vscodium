@@ -158,6 +158,7 @@ test('all stable source producers and consumers require private storage without 
       const step = build.slice(prerequisites).split('\n      - ')[0];
       assert.match(step, /openssh-client/);
       assert.doesNotMatch(step, /PRIVATE_SOURCE_DEPLOY_KEY/);
+      assert.doesNotMatch(step, /if:.*PRIVATE_SOURCE_REPOSITORY/);
     }
     for (const step of workflow.split(/\n      - /)) {
       if (!/name: (?:vscode|Upload private compile intermediate|Download private compile intermediate)\b/.test(step)) continue;
