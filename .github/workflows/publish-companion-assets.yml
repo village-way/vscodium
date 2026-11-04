@@ -1,0 +1,93 @@
+name: publish-companion-assets
+on:
+  pull_request:
+    paths: ['.github/workflows/publish-companion-assets.yml', '.build-entry/**', 'scripts/tests/companion-entry.test.mjs']
+  workflow_dispatch:
+    inputs:
+      release_version: {type: string, required: true}
+      source_commit: {type: string, required: true, description: Pinned private tooling commit}
+      companion_commit: {type: string, required: true}
+      artifact_run_id: {type: string, required: true}
+      artifact_workflow_commit: {type: string, required: true}
+      assets_repository: {type: string, required: true}
+      private_source_repository: {type: string}
+      companion_repository: {type: string}
+run-name: publish-companion-assets · ${{ inputs.release_version }} · ${{ inputs.artifact_run_id }}
+permissions:
+  contents: read
+env:
+  SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
+  RELEASE_VERSION: ${{ inputs.release_version }}
+  COMPANION_COMMIT: ${{ inputs.companion_commit }}
+  COMPANION_WINDOWS_PUBLISHER: ${{ vars.COMPANION_WINDOWS_PUBLISHER }}
+  ORIGINAL_WORKFLOW_COMMIT: ${{ inputs.artifact_workflow_commit }}
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: node --test scripts/tests/companion-entry.test.mjs
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-11-arm, target: windows}
+          - {runner: ubuntu-22.04, target: linux-x64}
+          - {runner: ubuntu-24.04-arm, target: linux-arm64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.build-entry/checkout-build-inputs
+        with:
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ inputs.source_commit }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          companion-repository: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+          companion-ref: ${{ inputs.companion_commit }}
+          companion-key: ${{ inputs.companion_repository != '' && secrets.COMPANION_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.COMPANION_APP_REPOSITORIES || vars.SOURCE_APP_REPOSITORIES }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Verify original artifact identity
+        id: origin
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORIGINAL_RUN_ID: ${{ inputs.artifact_run_id }}
+          SELECTED_TARGET: ${{ matrix.target }}
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/companion-ci.py" recovery-artifact --run-id "$ORIGINAL_RUN_ID" --workflow "$ORIGINAL_WORKFLOW_COMMIT" --target "$SELECTED_TARGET" --output "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.origin.outputs.artifact-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.artifact_run_id }}
+          path: native-input
+          merge-multiple: true
+      - name: Verify native ARM64 execution
+        if: matrix.target == 'windows'
+        shell: bash
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/companion-ci.py" arm-smoke --source companion-source --input native-input --output native-smoke
+      - name: Publish verified platform assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+          SELECTED_TARGET: ${{ matrix.target }}
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$ORIGINAL_WORKFLOW_COMMIT" --input native-input --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$ORIGINAL_WORKFLOW_COMMIT"

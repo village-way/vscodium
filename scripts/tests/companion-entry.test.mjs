@@ -9,12 +9,12 @@ import test from 'node:test';
 const read = (name) => readFileSync(new URL(`../../${name}`, import.meta.url), 'utf8');
 
 test('new entries register through credential-free validation and gate execution on manual dispatch', () => {
-  for (const name of ['build-release', 'build-companion']) {
+  for (const name of ['build-release', 'build-companion', 'publish-companion-assets']) {
     const workflow = read(`.github/workflows/${name}.yml`);
     assert.match(workflow, /pull_request:/);
     assert.doesNotMatch(workflow, /pull_request_target:/);
     assert.match(workflow, /if: github.event_name == 'workflow_dispatch'/);
-    const validation = workflow.split('  validate:\n')[1].split(/\n  (?:plan|dispatch):/)[0];
+    const validation = workflow.split('  validate:\n')[1].split(/\n  (?:plan|dispatch|publish):/)[0];
     assert.doesNotMatch(validation, /secrets\.|contents: write|id-token:/);
   }
   const parent = read('.github/workflows/build-release.yml');
@@ -22,6 +22,25 @@ test('new entries register through credential-free validation and gate execution
   assert.match(parent, /companion_ref:/);
   assert.match(parent, /source_ref:/);
   assert.match(parent, /scripts\/release-entry\.py/);
+});
+
+test('verified platforms upload independently while final collection and registry publication keep their complete gates', () => {
+  const workflow = read('.github/workflows/build-companion.yml');
+  assert.equal((workflow.match(/--incremental --workflow/g) ?? []).length, 3);
+  assert.match(workflow, /--platform "\$SELECTED_TARGET"/);
+  const arm = workflow.split('  windows-arm-smoke:\n')[1].split('  collect:\n')[0];
+  assert.match(arm, /if: always\(\) && needs\.plan\.result == 'success'/);
+  assert.doesNotMatch(arm, /needs\.native\.result == 'success'/);
+  assert.ok(arm.indexOf('Verify native ARM64 execution') < arm.indexOf('Publish verified Windows assets'));
+  assert.match(arm, /if: '!inputs.generate_assets'/);
+  const recovery = read('.github/workflows/publish-companion-assets.yml');
+  assert.match(recovery, /recovery-artifact --run-id/);
+  assert.match(recovery, /artifact-ids: \$\{\{ steps.origin.outputs.artifact-id \}\}/);
+  assert.match(recovery, /merge-multiple: true/);
+  assert.match(recovery, /--workflow "\$ORIGINAL_WORKFLOW_COMMIT"/);
+  assert.ok(recovery.indexOf('Verify native ARM64 execution') < recovery.indexOf('Publish verified platform assets'));
+  assert.doesNotMatch(recovery, /npm publish|publish-package\.yml|--allow-unsigned|upload-artifact@/);
+  assert.match(read('.github/workflows/publish-package.yml'), /node scripts\/wait-release-runs\.mjs/);
 });
 
 test('native matrix includes both Linux CPUs and separate real Windows ARM64 execution', () => {

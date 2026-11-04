@@ -67,6 +67,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.native) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -112,6 +114,16 @@ jobs:
           path: native-output/
           if-no-files-found: error
           retention-days: 7
+      - name: Publish verified platform assets
+        if: "!inputs.generate_assets && matrix.target == 'macos'"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+          SELECTED_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
   linux:
     needs: plan
     if: inputs.platform == 'all' || inputs.platform == 'linux'
@@ -121,6 +133,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: python:3.11-bullseye
     timeout-minutes: 120
+    permissions:
+      contents: write
     steps:
       - name: Verify transport tools and use authenticated package transport
         run: |
@@ -177,11 +191,24 @@ jobs:
           path: native-output/
           if-no-files-found: error
           retention-days: 7
+      - name: Publish verified platform assets
+        if: '!inputs.generate_assets'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+          SELECTED_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
   windows-arm-smoke:
     needs: [plan, native]
-    if: inputs.platform == 'all' || inputs.platform == 'windows'
+    if: always() && needs.plan.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'windows')
     runs-on: windows-11-arm
     timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -208,6 +235,15 @@ jobs:
       - name: Verify native ARM64 execution
         shell: bash
         run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/companion-ci.py" arm-smoke --source companion-source --input native-input --output native-smoke
+      - name: Publish verified Windows assets
+        if: '!inputs.generate_assets'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+        shell: bash
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-input --output platform-delivery --platform windows
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
   collect:
     needs: [plan, native, linux, windows-arm-smoke]
     if: >-
