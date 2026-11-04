@@ -87,6 +87,10 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Validate Windows environment handoff
+        if: matrix.target == 'windows'
+        shell: bash
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/tests/fixtures/windows-environment.py" "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py"
       - name: Build verified native distribution
         shell: bash
         env:
