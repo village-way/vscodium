@@ -56,12 +56,20 @@ export async function waitForRelease(context, api, { sleep = ms => new Promise(r
   if (!asset) throw new Error('Release delivery metadata is missing');
   verifyMetadata(context, await api(`/releases/assets/${asset.id}`, true));
   if (context.companionCommit) {
-    const companion = release.assets?.find(asset => asset.name === 'computer-use-delivery.json');
+    const manifest = release.assets?.find(asset => asset.name === 'manifest.json');
+    const document = manifest ? await api(`/releases/assets/${manifest.id}`, true) : undefined;
+    const unified = document && ['sourceCommit', 'workflowCommit', 'complete', 'platforms'].some(key => Object.hasOwn(document, key));
+    const companion = unified ? manifest : release.assets?.find(asset => asset.name === 'computer-use-delivery.json');
     if (!companion) throw new Error('Companion delivery metadata is missing');
-    const metadata = await api(`/releases/assets/${companion.id}`, true);
+    const metadata = unified ? document : await api(`/releases/assets/${companion.id}`, true);
     const expected = ['darwin-universal', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'];
+    const artifacts = unified && metadata.artifacts && !Array.isArray(metadata.artifacts) ? metadata.artifacts : undefined;
     if (metadata.version !== context.version || metadata.sourceCommit !== context.companionCommit || metadata.workflowCommit !== context.workflowCommit || metadata.complete !== true ||
-        !Array.isArray(metadata.platforms) || metadata.platforms.length !== expected.length || !expected.every(name => metadata.platforms.includes(name)) || metadata.artifacts?.length !== 5) {
+        !Array.isArray(metadata.platforms) || metadata.platforms.length !== expected.length || !expected.every(name => metadata.platforms.includes(name)) ||
+        (unified ? metadata.schemaVersion !== 1 || !artifacts || Object.keys(artifacts).length !== expected.length || expected.some(name => {
+          const item = artifacts[name];
+          return !item || typeof item.file !== 'string' || !item.file || !Number.isSafeInteger(item.size) || item.size <= 0 || !/^[a-f0-9]{64}$/.test(item.sha256);
+        }) : metadata.artifacts?.length !== 5)) {
       throw new Error('Companion delivery does not match the complete pinned batch');
     }
   }

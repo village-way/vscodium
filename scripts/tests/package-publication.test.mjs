@@ -79,18 +79,29 @@ test('joint publication requires four exact runs and complete companion provenan
   const joint = { ...context, companionCommit: 'c'.repeat(40), tag: 'ci1232', version: '1.7.0-ci1232.20261103120000', kind: 'development', runs: [...context.runs, { workflow: 'build-companion.yml', runId: 4 }] };
   const companion = { version: joint.version, sourceCommit: joint.companionCommit, workflowCommit: joint.workflowCommit, complete: true,
     platforms: ['darwin-universal', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'], artifacts: Array(5).fill({}) };
+  const manifest = { ...companion, schemaVersion: 1, artifacts: Object.fromEntries(companion.platforms.map(target => [target,
+    { file: `companion-${target}.zip`, size: 42, sha256: 'd'.repeat(64) }])) };
   const details = joint.runs.map(run => ({ ...detail(run), display_title: `${run.workflow.replace('.yml', '')} · ${joint.version} · ${joint.requestId}` }));
   const api = async route => {
     if (route.startsWith('/actions/runs/')) return details.find(run => route.endsWith(`/${run.id}`));
-    if (route.startsWith('/releases?')) return [{ tag_name: joint.version, draft: true, assets: [{ name: 'delivery.json', id: 9 }, { name: 'computer-use-delivery.json', id: 10 }] }];
-    return route.endsWith('/10') ? companion : { ...metadata, releaseVersion: joint.version };
+    if (route.startsWith('/releases?')) return [{ tag_name: joint.version, draft: true, assets: [{ name: 'delivery.json', id: 9 }, { name: 'manifest.json', id: 10 }] }];
+    return route.endsWith('/10') ? manifest : { ...metadata, releaseVersion: joint.version };
   };
   await waitForRelease(joint, api);
   assert.throws(() => validateBatch({ ...joint, runs: joint.runs.slice(0, 3) }), /all platform/);
   assert.throws(() => validateBatch({ ...joint, tag: 'latest' }), /npm channel/);
-  for (const change of [{ complete: false }, { sourceCommit: 'd'.repeat(40) }, { workflowCommit: 'e'.repeat(40) }, { artifacts: [] }]) {
-    await assert.rejects(waitForRelease(joint, route => route.endsWith('/10') ? { ...companion, ...change } : api(route)), /Companion delivery/);
+  for (const change of [{ complete: false }, { sourceCommit: 'd'.repeat(40) }, { workflowCommit: 'e'.repeat(40) }, { artifacts: [] },
+    { artifacts: { ...manifest.artifacts, 'linux-x64': { file: 'fixture.zip', size: 0, sha256: 'd'.repeat(64) } } },
+    { sourceCommit: undefined }, { platforms: companion.platforms.slice(1) }]) {
+    await assert.rejects(waitForRelease(joint, route => route.endsWith('/10') ? { ...manifest, ...change } : api(route)), /Companion delivery/);
   }
+  const legacyApi = async route => {
+    if (route.startsWith('/releases?')) return [{ tag_name: joint.version, draft: true, assets: [{ name: 'delivery.json', id: 9 }, { name: 'manifest.json', id: 10 }, { name: 'computer-use-delivery.json', id: 11 }] }];
+    if (route.endsWith('/10')) return { version: joint.version, artifacts: manifest.artifacts };
+    return route.endsWith('/11') ? companion : api(route);
+  };
+  await waitForRelease(joint, legacyApi);
+  await assert.rejects(waitForRelease(joint, route => route.endsWith('/10') ? { ...manifest, sourceCommit: 'invalid' } : legacyApi(route)), /Companion delivery/);
 });
 
 test('failed, cancelled and timed-out platforms block package publication', () => {
