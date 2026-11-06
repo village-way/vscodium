@@ -1,0 +1,51 @@
+name: Checkout private source
+description: Fetch one private repository without persisting credentials.
+inputs:
+  repository:
+    required: true
+    description: Private repository owner/name
+  ref:
+    required: true
+    description: Ref to resolve once, or an immutable commit
+  path:
+    required: true
+    description: New checkout directory
+  deploy-key:
+    required: false
+    description: Repository-scoped deploy key
+  token:
+    required: false
+    description: Short-lived read token when no deploy key is supplied
+outputs:
+  commit:
+    value: ${{ steps.identity.outputs.commit }}
+    description: Resolved source identity
+runs:
+  using: composite
+  steps:
+    - name: Verify private visibility
+      shell: bash
+      env:
+        SELECTED_REPOSITORY: ${{ inputs.repository }}
+        VISIBILITY_TOKEN: ${{ inputs.token || github.token }}
+        HAS_DEPLOY_KEY: ${{ inputs.deploy-key != '' }}
+      run: bash "$GITHUB_WORKSPACE/.build-entry/checkout-source/verify-private.sh"
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        path: ${{ inputs.path }}
+        ssh-key: ${{ inputs.deploy-key }}
+        token: ${{ inputs.token || github.token }}
+        persist-credentials: false
+        fetch-depth: 1
+    - name: Record immutable identity
+      id: identity
+      shell: bash
+      env:
+        SELECTED_PATH: ${{ inputs.path }}
+        SELECTED_REF: ${{ inputs.ref }}
+      run: |
+        actual="$(git -C "$SELECTED_PATH" rev-parse HEAD)"
+        if [[ "$SELECTED_REF" =~ ^[a-f0-9]{40}$ ]]; then test "$actual" = "$SELECTED_REF"; fi
+        printf 'commit=%s\n' "$actual" >> "$GITHUB_OUTPUT"

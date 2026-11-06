@@ -1,0 +1,298 @@
+name: build-companion
+on:
+  pull_request:
+    paths: ['.github/workflows/build-companion.yml', '.build-entry/**', 'scripts/tests/companion-entry.test.mjs']
+  workflow_dispatch:
+    inputs:
+      portal_request_id: {type: string, required: true}
+      release_version: {type: string, required: true}
+      release_kind: {type: choice, options: [auto, formal, development], default: auto}
+      source_commit: {type: string, required: true}
+      companion_commit: {type: string, required: true}
+      platform: {type: choice, options: [all, macos, windows, linux], default: all}
+      generate_assets: {type: boolean, default: false}
+      assets_repository: {type: string, required: true}
+      private_source_repository: {type: string}
+      companion_repository: {type: string}
+run-name: build-companion · ${{ inputs.release_version }} · ${{ inputs.portal_request_id }}
+permissions:
+  contents: read
+env:
+  SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
+  RELEASE_VERSION: ${{ inputs.release_version }}
+  COMPANION_COMMIT: ${{ inputs.companion_commit }}
+  COMPANION_WINDOWS_PUBLISHER: ${{ vars.COMPANION_WINDOWS_PUBLISHER }}
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: node --test scripts/tests/companion-entry.test.mjs
+  plan:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.matrix.outputs.native }}
+      linux: ${{ steps.matrix.outputs.linux }}
+    steps:
+      - name: Select native matrix
+        id: matrix
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        shell: bash
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ && "$COMPANION_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          case "$SELECTED_PLATFORM" in all|macos|windows|linux) ;; *) exit 1 ;; esac
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          const selected = process.env.SELECTED_PLATFORM;
+          const native = [
+            {runner: 'macos-15', target: 'macos'},
+            {runner: 'windows-2025', target: 'windows'},
+          ].filter(item => selected === 'all' || item.target === selected);
+          const linux = ['x64', 'arm64'].filter(() => ['all', 'linux'].includes(selected)).map(arch => ({
+            runner: arch === 'x64' ? 'ubuntu-22.04' : 'ubuntu-24.04-arm', target: `linux-${arch}`,
+          }));
+          appendFileSync(process.env.GITHUB_OUTPUT, `native=${JSON.stringify({include:native})}\nlinux=${JSON.stringify({include:linux})}\n`);
+          JS
+  native:
+    needs: plan
+    if: inputs.platform != 'linux'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.native) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.build-entry/checkout-build-inputs
+        with:
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ inputs.source_commit }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          companion-repository: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+          companion-ref: ${{ inputs.companion_commit }}
+          companion-key: ${{ inputs.companion_repository != '' && secrets.COMPANION_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.COMPANION_APP_REPOSITORIES || vars.SOURCE_APP_REPOSITORIES }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Validate Windows environment handoff
+        if: matrix.target == 'windows'
+        shell: bash
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/tests/fixtures/windows-environment.py" "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py"
+      - name: Build verified native distribution
+        shell: bash
+        env:
+          SELECTED_TARGET: ${{ matrix.target }}
+          SELECTED_KIND: ${{ inputs.release_kind }}
+          CERTIFICATE_OSX_ID: ${{ secrets.CERTIFICATE_OSX_ID }}
+          CERTIFICATE_OSX_TEAM_ID: ${{ secrets.CERTIFICATE_OSX_TEAM_ID }}
+          CERTIFICATE_OSX_APP_PASSWORD: ${{ secrets.CERTIFICATE_OSX_APP_PASSWORD }}
+          CERTIFICATE_OSX_P12_DATA: ${{ secrets.CERTIFICATE_OSX_P12_DATA }}
+          CERTIFICATE_OSX_P12_PASSWORD: ${{ secrets.CERTIFICATE_OSX_P12_PASSWORD }}
+          COMPANION_WINDOWS_P12_DATA: ${{ secrets.COMPANION_WINDOWS_P12_DATA }}
+          COMPANION_WINDOWS_P12_PASSWORD: ${{ secrets.COMPANION_WINDOWS_P12_PASSWORD }}
+        run: |
+          kind="$(node "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/release-kind.mjs" "$RELEASE_VERSION" "$SELECTED_KIND")"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --platform "$SELECTED_TARGET" --kind "$kind" --release-version "$RELEASE_VERSION" --distribution --output native-output
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: companion-${{ github.run_id }}-${{ matrix.target }}
+          path: native-output/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publish verified platform assets
+        if: "!inputs.generate_assets && matrix.target == 'macos'"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+          SELECTED_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
+  linux:
+    needs: plan
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.linux) }}
+    runs-on: ${{ matrix.runner }}
+    container: python:3.11-bullseye
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - name: Verify transport tools and use authenticated package transport
+        run: |
+          for tool in curl git ssh python3; do command -v "$tool" >/dev/null; done
+          test -s /etc/ssl/certs/ca-certificates.crt
+          python3 - <<'PY'
+          from pathlib import Path
+          files = [Path('/etc/apt/sources.list'), *Path('/etc/apt/sources.list.d').glob('*.list'), *Path('/etc/apt/sources.list.d').glob('*.sources')]
+          for file in files:
+              if file.is_file():
+                  text = file.read_text()
+                  for origin in ('http://deb.debian.org/', 'https://deb.debian.org/', 'http://security.debian.org/', 'https://security.debian.org/'):
+                      text = text.replace(origin, 'https://archive.debian.org/')
+                  file.write_text(text)
+          Path('/etc/apt/apt.conf.d/99-ci-update-errors').write_text('APT::Update::Error-Mode "any";\n')
+          PY
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.build-entry/checkout-build-inputs
+        with:
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ inputs.source_commit }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          companion-repository: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+          companion-ref: ${{ inputs.companion_commit }}
+          companion-key: ${{ inputs.companion_repository != '' && secrets.COMPANION_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.COMPANION_APP_REPOSITORIES || vars.SOURCE_APP_REPOSITORIES }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Prepare native host
+        shell: bash
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/companion-ci.py" prepare-linux
+          curl --proto '=https' --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build verified native distribution
+        shell: bash
+        env:
+          SELECTED_TARGET: ${{ matrix.target }}
+          SELECTED_KIND: ${{ inputs.release_kind }}
+        run: |
+          kind="$(node "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/release-kind.mjs" "$RELEASE_VERSION" "$SELECTED_KIND")"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --platform "$SELECTED_TARGET" --kind "$kind" --release-version "$RELEASE_VERSION" --distribution --output native-output
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: companion-${{ github.run_id }}-${{ matrix.target }}
+          path: native-output/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publish verified platform assets
+        if: '!inputs.generate_assets'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+          SELECTED_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
+  windows-arm-smoke:
+    needs: [plan, native]
+    if: always() && needs.plan.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'windows')
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.build-entry/checkout-build-inputs
+        with:
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ inputs.source_commit }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          companion-repository: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+          companion-ref: ${{ inputs.companion_commit }}
+          companion-key: ${{ inputs.companion_repository != '' && secrets.COMPANION_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.COMPANION_APP_REPOSITORIES || vars.SOURCE_APP_REPOSITORIES }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: companion-${{ github.run_id }}-windows
+          path: native-input
+      - name: Verify native ARM64 execution
+        shell: bash
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/companion-ci.py" arm-smoke --source companion-source --input native-input --output native-smoke
+      - name: Publish verified Windows assets
+        if: '!inputs.generate_assets'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+        shell: bash
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-input --output platform-delivery --platform windows
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
+  collect:
+    needs: [plan, native, linux, windows-arm-smoke]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      (needs.native.result == 'success' || (inputs.platform == 'linux' && needs.native.result == 'skipped')) &&
+      (needs.linux.result == 'success' || ((inputs.platform == 'macos' || inputs.platform == 'windows') && needs.linux.result == 'skipped')) &&
+      (needs.windows-arm-smoke.result == 'success' || ((inputs.platform == 'macos' || inputs.platform == 'linux') && needs.windows-arm-smoke.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.build-entry/checkout-build-inputs
+        with:
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ inputs.source_commit }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          companion-repository: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+          companion-ref: ${{ inputs.companion_commit }}
+          companion-key: ${{ inputs.companion_repository != '' && secrets.COMPANION_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.COMPANION_APP_REPOSITORIES || vars.SOURCE_APP_REPOSITORIES }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: companion-${{ github.run_id }}-*
+          path: native-input
+          merge-multiple: true
+      - name: Verify selected delivery matrix
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-input --output companion-delivery --platform "$SELECTED_PLATFORM"
+      - name: Upload draft assets
+        if: '!inputs.generate_assets'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish companion-delivery
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: companion-delivery-${{ github.run_id }}
+          path: companion-delivery/
+          if-no-files-found: error
+          retention-days: 7

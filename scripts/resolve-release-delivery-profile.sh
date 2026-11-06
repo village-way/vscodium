@@ -2,6 +2,15 @@
 # shellcheck shell=bash
 
 resolve_release_delivery_profile() {
+    if [[ -n "${SOURCE_CHECKOUT_ROOT:-}" ]]; then
+        if [[ -n "${SOURCE_SUBDIR:-}" && ! "${SOURCE_SUBDIR}" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$ ]]; then
+            echo 'Invalid source layout.' >&2
+            return 1
+        fi
+        source "${SOURCE_CHECKOUT_ROOT}${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/resolve-release-delivery-profile.sh"
+        resolve_release_delivery_profile "$@"
+        return
+    fi
     local source_ref="$1"
     local profile_id="$2"
     local current_assets_repository="$3"
@@ -50,6 +59,11 @@ resolve_release_delivery_profile() {
     else
         ZHANLU_DELIVERY_ASSETS_REPOSITORY="$(jq -r '.assetsRepository' <<<"${result}")"
     fi
+    # Resolve expectations from the pinned private source, never from uploaded assets.
+    if ! ZHANLU_DELIVERY_EXPECTED_ASSETS="$(bash "${package_root}/scripts/check-release-status.sh" '__RELEASE_VERSION__' "${current_assets_repository}" --expected-json)"; then
+        rm -rf "${temp_root}"
+        return 1
+    fi
     if [[ -f "${package_root}/release_notes.md" ]]; then
         ZHANLU_RELEASE_NOTES_TEMPLATE="$(mktemp)"
         cp "${package_root}/release_notes.md" "${ZHANLU_RELEASE_NOTES_TEMPLATE}"
@@ -60,7 +74,7 @@ resolve_release_delivery_profile() {
     rm -rf "${temp_root}"
     export ZHANLU_DELIVERY_PROFILE ZHANLU_DELIVERY_SOURCE_COMMIT
     export ZHANLU_DELIVERY_PROFILE_DIGEST ZHANLU_DELIVERY_ASSETS_REPOSITORY
-    export ZHANLU_RELEASE_NOTES_TEMPLATE
+    export ZHANLU_RELEASE_NOTES_TEMPLATE ZHANLU_DELIVERY_EXPECTED_ASSETS
 }
 
 prepare_release_delivery_profile() {
@@ -95,6 +109,7 @@ write_release_delivery_metadata() {
         --arg sourceCommit "${ZHANLU_DELIVERY_SOURCE_COMMIT:-}" \
         --arg profileDigest "${ZHANLU_DELIVERY_PROFILE_DIGEST:-}" \
         --arg assetsRepository "${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-${ASSETS_REPOSITORY}}" \
-        '{schemaVersion:1,releaseVersion:$releaseVersion,deliveryProfile:$profile,sourceRef:$sourceRef,sourceCommit:$sourceCommit,profileDigest:$profileDigest,assetsRepository:$assetsRepository}' \
+        --argjson expectedAssets "${ZHANLU_DELIVERY_EXPECTED_ASSETS:?missing artifact contract}" \
+        '{schemaVersion:1,releaseVersion:$releaseVersion,deliveryProfile:$profile,sourceRef:$sourceRef,sourceCommit:$sourceCommit,profileDigest:$profileDigest,assetsRepository:$assetsRepository,expectedAssets:($expectedAssets | walk(if type == "string" then gsub("__RELEASE_VERSION__";$releaseVersion) else . end))}' \
         > "${output}"
 }

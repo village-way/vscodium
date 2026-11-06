@@ -24,7 +24,7 @@ test('public versions select the channel and conflicting hints fail before platf
 
 test('draft verification has push access while only publication has OIDC permission', () => {
   const workflow = fs.readFileSync(new URL('../../.github/workflows/publish-package.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
-  const [, wait, publish] = workflow.split(/\n  (?:wait|publish):\n/);
+  const [, wait, publish, receipt] = workflow.split(/\n  (?:wait|publish|receipt):\n/);
   assert.match(wait, /contents: write/);
   assert.match(wait, /actions: read/);
   assert.doesNotMatch(wait, /id-token:/);
@@ -33,6 +33,8 @@ test('draft verification has push access while only publication has OIDC permiss
   assert.match(publish, /RELEASE_KIND: \$\{\{ needs\.wait\.outputs\.release-kind \}\}/);
   assert.match(publish, /id-token: write/);
   assert.doesNotMatch(publish, /contents: write/);
+  assert.match(receipt, /contents: write/);
+  assert.doesNotMatch(receipt, /id-token:/);
 });
 
 test('waits for every selected platform and then validates the fixed release source', async () => {
@@ -73,6 +75,35 @@ test('recovery pins the original platform commit even when the publication workf
   assert.throws(() => validateBatch({ ...context, workflowCommit: 'develop' }), /Invalid release identity/);
 });
 
+test('joint publication requires four exact runs and complete companion provenance before publication', async () => {
+  const joint = { ...context, companionCommit: 'c'.repeat(40), tag: 'ci1232', version: '1.7.0-ci1232.20261103120000', kind: 'development', runs: [...context.runs, { workflow: 'build-companion.yml', runId: 4 }] };
+  const companion = { version: joint.version, sourceCommit: joint.companionCommit, workflowCommit: joint.workflowCommit, complete: true,
+    platforms: ['darwin-universal', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'], artifacts: Array(5).fill({}) };
+  const manifest = { ...companion, schemaVersion: 1, artifacts: Object.fromEntries(companion.platforms.map(target => [target,
+    { file: `companion-${target}.zip`, size: 42, sha256: 'd'.repeat(64) }])) };
+  const details = joint.runs.map(run => ({ ...detail(run), display_title: `${run.workflow.replace('.yml', '')} · ${joint.version} · ${joint.requestId}` }));
+  const api = async route => {
+    if (route.startsWith('/actions/runs/')) return details.find(run => route.endsWith(`/${run.id}`));
+    if (route.startsWith('/releases?')) return [{ tag_name: joint.version, draft: true, assets: [{ name: 'delivery.json', id: 9 }, { name: 'manifest.json', id: 10 }] }];
+    return route.endsWith('/10') ? manifest : { ...metadata, releaseVersion: joint.version };
+  };
+  await waitForRelease(joint, api);
+  assert.throws(() => validateBatch({ ...joint, runs: joint.runs.slice(0, 3) }), /all platform/);
+  assert.throws(() => validateBatch({ ...joint, tag: 'latest' }), /npm channel/);
+  for (const change of [{ complete: false }, { sourceCommit: 'd'.repeat(40) }, { workflowCommit: 'e'.repeat(40) }, { artifacts: [] },
+    { artifacts: { ...manifest.artifacts, 'linux-x64': { file: 'fixture.zip', size: 0, sha256: 'd'.repeat(64) } } },
+    { sourceCommit: undefined }, { platforms: companion.platforms.slice(1) }]) {
+    await assert.rejects(waitForRelease(joint, route => route.endsWith('/10') ? { ...manifest, ...change } : api(route)), /Companion delivery/);
+  }
+  const legacyApi = async route => {
+    if (route.startsWith('/releases?')) return [{ tag_name: joint.version, draft: true, assets: [{ name: 'delivery.json', id: 9 }, { name: 'manifest.json', id: 10 }, { name: 'computer-use-delivery.json', id: 11 }] }];
+    if (route.endsWith('/10')) return { version: joint.version, artifacts: manifest.artifacts };
+    return route.endsWith('/11') ? companion : api(route);
+  };
+  await waitForRelease(joint, legacyApi);
+  await assert.rejects(waitForRelease(joint, route => route.endsWith('/10') ? { ...manifest, sourceCommit: 'invalid' } : legacyApi(route)), /Companion delivery/);
+});
+
 test('failed, cancelled and timed-out platforms block package publication', () => {
   for (const conclusion of ['failure', 'cancelled', 'timed_out', 'skipped']) {
     assert.throws(() => batchStatus(context, context.runs.map(run => detail(run, 'completed', conclusion))), /Platform publication failed/);
@@ -105,6 +136,9 @@ case "$*" in
   'repo view --json nameWithOwner -q .nameWithOwner') echo example/build ;;
   release\\ download*) exit 1 ;;
   release\\ view*) echo true ;;
+  api\\ repos/example/build/commits/*) printf '%s\\n' "$MOCK_WORKFLOW_SHA" ;;
+  api\\ repos/example/build/git/ref/tags/*) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
+  api\\ --method\\ POST\\ repos/example/build/git/refs*) printf '%s\\n' "$*" >> "$MOCK_TAG_LOG"; echo '{}' ;;
   api\\ *dispatches*)
     payload="$(cat)"
     printf '%s\\n' "$payload" >> "$MOCK_DISPATCH_LOG"
@@ -112,16 +146,18 @@ case "$*" in
       *stable-macos.yml*) n=1 ;;
       *stable-linux.yml*) n=2 ;;
       *stable-windows.yml*) n=3 ;;
-      *publish-package.yml*) n=4 ;;
+      *build-companion.yml*) n=4 ;;
+      *publish-package.yml*) n=5 ;;
     esac
     printf '{"workflow_run_id":%s,"html_url":"https://example.test/%s"}\\n' "$n" "$n" ;;
   *) echo 'unexpected fixture command' >&2; exit 99 ;;
 esac
 `, { mode: 0o755 });
     const log = path.join(root, 'dispatch.jsonl');
-    const run = (args, success = true) => {
+    const run = (args, success = true, overrides = {}) => {
       fs.writeFileSync(log, '');
-      const result = spawnSync('bash', ['./scripts/trigger-stable-release.sh', '--workflow-ref', 'develop', '--release-version', '1.6.4', '--request-id', 'request-1', '--output', 'json', ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`, MOCK_DISPATCH_LOG: log, SOURCE_REPOSITORY: 'example/source', SOURCE_SUBDIR: 'packaging' } });
+      fs.writeFileSync(path.join(root, 'tags.log'), '');
+      const result = spawnSync('bash', ['./scripts/trigger-stable-release.sh', '--workflow-ref', 'develop', '--release-version', '1.6.4', '--request-id', 'request-1', '--output', 'json', ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`, MOCK_DISPATCH_LOG: log, MOCK_TAG_LOG: path.join(root, 'tags.log'), MOCK_WORKFLOW_SHA: 'b'.repeat(40), SOURCE_REPOSITORY: 'example/source', SOURCE_SUBDIR: 'packaging', ...overrides } });
       if (success) assert.equal(result.status, 0, result.stderr + result.stdout);
       else assert.notEqual(result.status, 0, result.stderr + result.stdout);
       const calls = fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
@@ -129,26 +165,43 @@ esac
       return { calls, document };
     };
     const formal = run(['--workflow', '--platform', 'all', '--release-kind', 'formal', '--version-time-patch', '7192']);
-    assert.equal(formal.calls.length, 4);
-    const packageInputs = formal.calls.at(-1).inputs;
+    assert.equal(formal.calls.length, 3, 'npm defaults off for all installers');
+    assert.equal(formal.document.npmRun, undefined);
+    const joint = run(['--workflow', '--platform', 'all', '--publish-npm', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private']);
+    assert.equal(joint.calls.length, 5);
+    const packageInputs = joint.calls.at(-1).inputs;
+    assert.equal(packageInputs.publish_npm, true);
     assert.equal(packageInputs.release_kind, 'formal');
     assert.equal(packageInputs.source_commit, 'a'.repeat(40));
-    assert.deepEqual(JSON.parse(packageInputs.platform_runs).map(run => run.runId), [1, 2, 3]);
-    assert.equal(formal.document.npmRun.runId, 4);
+    assert.equal(packageInputs.companion_commit, 'c'.repeat(40));
+    assert.equal(packageInputs.npm_tag, 'latest');
+    assert.deepEqual(JSON.parse(packageInputs.platform_runs).map(run => run.runId), [1, 2, 3, 4]);
+    assert.equal(joint.document.npmRun.runId, 5);
     const single = run(['--workflow', '--platform', 'linux']);
-    assert.equal(single.calls.length, 2);
-    assert.equal(single.calls.at(-1).inputs.release_kind, 'formal');
+    assert.equal(single.calls.length, 1);
     const development = run(['--workflow', '--platform', 'linux', '--release-version', '1.7.17192']);
-    assert.equal(development.calls.at(-1).inputs.release_kind, 'development');
+    assert.equal(development.calls.length, 1);
     const conflict = run(['--workflow', '--platform', 'all', '--release-kind', 'development'], false);
     assert.equal(conflict.calls.length, 0);
+    const invalidJoint = run(['--workflow', '--platform', 'linux', '--publish-npm'], false);
+    assert.equal(invalidJoint.calls.length, 0);
+    const testing = run(['--workflow', '--release-version', '1.7.0-ci1232.20261103120000', '--publish-npm', '--npm-tag', 'ci1232', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private']);
+    assert.equal(testing.calls.at(-1).inputs.npm_tag, 'ci1232');
     for (const args of [['--workflow', '--platform', 'linux', '--generate'], ['--workflow', '--platform', 'linux', '--delivery-profile', 'customer']]) {
       const skipped = run(args);
       assert.equal(skipped.calls.length, 1);
       assert.equal(skipped.document.npmRun, undefined);
     }
+    const pinned = run(['--workflow', '--platform', 'linux'], true, { RELEASE_WORKFLOW_COMMIT: 'b'.repeat(40) });
+    assert.equal(pinned.calls[0].ref, 'build-request-request-1');
+    assert.match(fs.readFileSync(path.join(root, 'tags.log'), 'utf8'), /refs\/tags\/build-request-request-1/);
+    const moved = run(['--workflow', '--platform', 'linux'], false, { RELEASE_WORKFLOW_COMMIT: 'c'.repeat(40) });
+    assert.equal(moved.calls.length, 0);
+    const preview = run(['--workflow', '--platform', 'linux', '--dry-run'], true, { RELEASE_WORKFLOW_COMMIT: 'b'.repeat(40) });
+    assert.equal(preview.calls.length, 0);
+    assert.equal(fs.readFileSync(path.join(root, 'tags.log'), 'utf8'), '');
     const all = run(['--dispatch', '--platform', 'linux', '--bundle-codex-runtime', '1']);
-    assert.equal(all.calls.length, 4);
-    assert.ok(all.calls.slice(0, 3).every(call => call.inputs.bundle_codex_runtime === '1'));
+    assert.equal(all.calls.length, 3);
+    assert.ok(all.calls.every(call => call.inputs.bundle_codex_runtime === '1'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

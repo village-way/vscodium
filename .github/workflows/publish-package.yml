@@ -3,6 +3,11 @@ name: publish-package
 on:
   workflow_dispatch:
     inputs:
+      publish_npm: {type: boolean, default: false, description: Explicit joint publication opt-in}
+      companion_commit: {type: string, required: true}
+      companion_repository: {type: string}
+      private_source_repository: {type: string}
+      npm_tag: {type: choice, options: [latest, ci1232], default: latest}
       release_version:
         type: string
         required: true
@@ -34,6 +39,8 @@ env:
   RELEASE_VERSION: ${{ inputs.release_version }}
   RELEASE_KIND: ${{ inputs.release_kind || 'auto' }}
   SOURCE_COMMIT: ${{ inputs.source_commit }}
+  COMPANION_COMMIT: ${{ inputs.companion_commit }}
+  NPM_TAG: ${{ inputs.npm_tag }}
   REQUEST_ID: ${{ inputs.request_id }}
   PLATFORM_RUNS: ${{ inputs.platform_runs }}
   PLATFORM_WORKFLOW_COMMIT: ${{ inputs.platform_workflow_commit || github.sha }}
@@ -41,6 +48,7 @@ env:
 
 jobs:
   wait:
+    if: inputs.publish_npm
     runs-on: ubuntu-latest
     timeout-minutes: 360
     outputs:
@@ -83,23 +91,18 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Create source read token
-        id: source-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      - uses: ./.build-entry/checkout-build-inputs
         with:
-          client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
-          permission-contents: read
-      - name: Checkout pinned source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          repository: ${{ vars.SOURCE_REPOSITORY }}
-          ref: ${{ inputs.source_commit }}
-          token: ${{ steps.source-token.outputs.token }}
-          persist-credentials: false
-          path: source
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ inputs.source_commit }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          companion-repository: ${{ inputs.companion_repository || vars.COMPANION_SOURCE_REPOSITORY }}
+          companion-ref: ${{ inputs.companion_commit }}
+          companion-key: ${{ inputs.companion_repository != '' && secrets.COMPANION_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.COMPANION_APP_REPOSITORIES || vars.SOURCE_APP_REPOSITORIES }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -107,7 +110,7 @@ jobs:
           package-manager-cache: false
       - name: Read pinned package runtime
         id: runtime
-        run: node "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/npm-package-runtime.mjs" >> "$GITHUB_OUTPUT"
+        run: node "build-source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/npm-package-runtime.mjs" >> "$GITHUB_OUTPUT"
       - name: Verify publication contract
         env:
           PUBLICATION_FORMAT: ${{ steps.runtime.outputs.publication-format }}
@@ -128,12 +131,36 @@ jobs:
           artifact-ids: ${{ steps.bundle.outputs.artifact-id }}
           path: package-publication
           merge-multiple: true
+      - name: Select exact native delivery run
+        if: steps.bundle.outputs.artifact-id == ''
+        id: native
+        run: |
+          node --input-type=module <<'JS'
+          import {appendFileSync} from 'node:fs';
+          const run = JSON.parse(process.env.PLATFORM_RUNS).find(run => run.workflow === 'build-companion.yml');
+          if (!Number.isSafeInteger(run?.runId) || run.runId <= 0) throw new Error('Missing native delivery run');
+          appendFileSync(process.env.GITHUB_OUTPUT, `run-id=${run.runId}\n`);
+          JS
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: steps.bundle.outputs.artifact-id == ''
+        with:
+          name: companion-delivery-${{ steps.native.outputs.run-id }}
+          run-id: ${{ steps.native.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: native-input
+      - name: Prepare verified native npm inputs
+        if: steps.bundle.outputs.artifact-id == ''
+        env:
+          COMPANION_MACOS_TEAM_ID: ${{ secrets.CERTIFICATE_OSX_TEAM_ID }}
+          COMPANION_WINDOWS_PUBLISHER: ${{ vars.COMPANION_WINDOWS_PUBLISHER }}
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$PLATFORM_WORKFLOW_COMMIT" --input native-input --output verified-native --npm-output companion-npm
       - name: Prepare verified publication
         id: prepare
         env:
+          COMPUTER_USE_NPM_DIR: ${{ github.workspace }}/companion-npm
           PACKAGE_PUBLICATION_PHASE: prepare
           PACKAGE_PUBLICATION_DIR: ${{ github.workspace }}/package-publication
-        run: bash "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/publish-npm-package.sh"
+        run: bash "build-source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/publish-npm-package.sh"
       - name: Preserve verified publication
         if: steps.prepare.outputs.bundle-created == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -147,4 +174,43 @@ jobs:
         env:
           PACKAGE_PUBLICATION_PHASE: publish
           PACKAGE_PUBLICATION_DIR: ${{ github.workspace }}/package-publication
-        run: bash "source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/publish-npm-package.sh"
+        run: bash "build-source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/publish-npm-package.sh"
+      - name: Preserve publication result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: publication-result-${{ github.run_id }}
+          path: package-publication/result/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve latest batch journal
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: publication-state-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-publication/batch-journal.json
+          if-no-files-found: warn
+          retention-days: 30
+  receipt:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: publication-result-${{ github.run_id }}
+          path: result
+      - name: Attach verified result to the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          temporary="$(mktemp -d)"
+          trap 'rm -rf "$temporary"' EXIT
+          name="npm-publication-$REQUEST_ID.json"
+          if gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$temporary" >/dev/null 2>&1; then
+            cmp "result/$name" "$temporary/$name"
+          else
+            gh release upload "$RELEASE_VERSION" "result/$name" --repo "$GITHUB_REPOSITORY"
+          fi

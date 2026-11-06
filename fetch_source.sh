@@ -67,9 +67,22 @@ if [[ ! "${SOURCE_FETCH_RETRY_DELAY}" =~ ^[0-9]+$ ]]; then
     echo "Error: SOURCE_FETCH_RETRY_DELAY must be a whole number of seconds" >&2
     exit 1
 fi
+# Private source transport remains outside scripts/, which the fetched tree replaces.
+fetch_source_once() {
+    if [[ -n "${PRIVATE_SOURCE_REPOSITORY:-}" ]]; then
+        if [[ "${SOURCE_REPO_URL}" != "https://github.com/${PRIVATE_SOURCE_REPOSITORY}.git" ]]; then
+            echo "Error: private source URL does not match the configured repository" >&2
+            return 1
+        fi
+        bash "${_SCRIPT_DIR}/.build-entry/private-git.sh" git fetch "$@"
+    else
+        secure_git fetch "$@"
+    fi
+}
+
 fetch_source_ref() {
     local attempt=1
-    until secure_git fetch "$@"; do
+    until fetch_source_once "$@"; do
         if (( attempt >= 4 )); then
             return 1
         fi

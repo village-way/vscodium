@@ -26,6 +26,7 @@ set -e
 # 默认值
 TRIGGER_MODE="dispatch"
 GENERATE_ONLY=false
+PUBLISH_NPM=false
 FORCE_VERSION=false
 PLATFORM="all"
 DRY_RUN=false
@@ -50,6 +51,11 @@ RELEASE_VERSION="${RELEASE_VERSION:-}"
 VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
 REQUEST_ID=""
 OUTPUT_FORMAT="text"
+COMPUTER_USE_REF=""
+NPM_TAG="latest"
+PRIVATE_SOURCE_REPOSITORY="${PRIVATE_SOURCE_REPOSITORY:-}"
+COMPANION_REPOSITORY="${COMPANION_REPOSITORY:-}"
+COMPUTER_USE_COMMIT="${ZHANLU_COMPUTER_USE_COMMIT:-}"
 # zhanlu_change start - release kind selects the npm channel explicitly
 RELEASE_KIND="auto"
 # zhanlu_change end
@@ -100,6 +106,11 @@ VSCodium Stable 版本手动触发脚本
   --request-id     门户请求 UUID；写入 workflow run-name
   --output         text 或 json；json 输出固定 schema v1
   --dry-run       仅显示将要执行的命令，不实际执行
+  --publish-npm   联合发布全部原生平台包和主包；默认不发布 npm
+  --no-npm        禁止全部 npm 写入
+  --npm-tag       latest 或 ci1232（测试预发布）
+  --computer-use-ref 指定私有 companion 源码 Ref
+  --computer-use-commit 固定 companion 的完整 SHA
   --help          显示帮助信息
 
 示例:
@@ -152,6 +163,22 @@ while [[ $# -gt 0 ]]; do
             GENERATE_ONLY=true
             shift
             ;;
+        --no-npm)
+            PUBLISH_NPM=false; shift ;;
+        --computer-use-commit)
+            COMPUTER_USE_COMMIT="$2"; shift 2 ;;
+        # zhanlu_change start - explicit optional companion and joint publication controls
+        --publish-npm)
+            PUBLISH_NPM=true; shift ;;
+        --npm-tag)
+            NPM_TAG="$2"; shift 2 ;;
+        --computer-use-ref)
+            COMPUTER_USE_REF="$2"; shift 2 ;;
+        --private-source-repository)
+            PRIVATE_SOURCE_REPOSITORY="$2"; shift 2 ;;
+        --companion-repository)
+            COMPANION_REPOSITORY="$2"; shift 2 ;;
+        # zhanlu_change end
         --force)
             FORCE_VERSION=true
             shift
@@ -284,6 +311,29 @@ get_repo_info() {
     # zhanlu_change end
 }
 
+# zhanlu_change start - workflow_dispatch accepts branch/tag refs, so pin a neutral immutable request tag
+pin_workflow_ref() {
+    local expected="${RELEASE_WORKFLOW_COMMIT:-}"
+    [[ -n "$expected" ]] || return 0
+    [[ "$expected" =~ ^[a-f0-9]{40}$ ]] || { print_error "Invalid workflow commit"; return 1; }
+    local encoded actual tag object
+    encoded="$(jq -rn --arg ref "$WORKFLOW_REF" '$ref|@uri')"
+    actual="$(gh api "repos/${REPO}/commits/${encoded}" --jq '.sha')"
+    [[ "$actual" == "$expected" ]] || { print_error "Workflow ref moved after confirmation"; return 1; }
+    tag="build-request-${REQUEST_ID}"
+    if [[ "$DRY_RUN" == true ]]; then WORKFLOW_REF="$tag"; return 0; fi
+    if object="$(gh api "repos/${REPO}/git/ref/tags/${tag}" 2>/dev/null)"; then
+        [[ "$(jq -r '.object.sha' <<<"$object")" == "$expected" ]] || { print_error "Request tag belongs to another workflow commit"; return 1; }
+    elif jq -e '(.status | tostring) == "404" or .message == "Not Found"' <<<"$object" >/dev/null 2>&1; then
+        gh api --method POST "repos/${REPO}/git/refs" -f "ref=refs/tags/${tag}" -f "sha=${expected}" >/dev/null || return 1
+    else
+        print_error "Request tag lookup failed; refusing to mutate references"
+        return 1
+    fi
+    WORKFLOW_REF="$tag"
+}
+# zhanlu_change end
+
 # zhanlu_change start - resolve once, then reuse release metadata instead of following a moving branch
 resolve_delivery_pin() {
     source "./scripts/resolve-release-delivery-profile.sh"
@@ -400,7 +450,7 @@ resolve_release_version() {
         fi
     fi
 
-    if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-insider)?$ ]]; then
+    if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-insider|-ci1232\.[1-9][0-9]*)?$ ]]; then
         print_error "Release 版本格式不正确: ${RELEASE_VERSION}"
         exit 1
     fi
@@ -531,15 +581,27 @@ trigger_workflow() {
     fi
 
     local runs_json="[]"
+    if [[ -n "${COMPUTER_USE_COMMIT}" ]]; then workflows+=("build-companion.yml"); fi # zhanlu_change
     local -a failed_workflows=() # zhanlu_change
     for workflow in "${workflows[@]}"; do
+        local -a dispatch_fields=("${wf_fields[@]}")
+        # zhanlu_change start - companion builds are independent of IDE internals
+        if [[ -n "${PRIVATE_SOURCE_REPOSITORY}" ]]; then dispatch_fields+=(-f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}"); fi
+        if [[ "$workflow" == "build-companion.yml" ]]; then
+            dispatch_fields=(-f "portal_request_id=${REQUEST_ID}" -f "release_version=${RELEASE_VERSION}"
+                -f "release_kind=${RELEASE_KIND}" -f "source_commit=${ZHANLU_DELIVERY_SOURCE_COMMIT}"
+                -f "companion_commit=${COMPUTER_USE_COMMIT}" -f "platform=${PLATFORM}"
+                -f "generate_assets=${GENERATE_ONLY}" -f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
+                -f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}" -f "companion_repository=${COMPANION_REPOSITORY}")
+        fi
+        # zhanlu_change end
         print_info "触发工作流: $workflow"
         if [[ "$DRY_RUN" == true ]]; then
-            echo -e "${YELLOW}[DRY-RUN]${NC} gh workflow run ${workflow} --ref ${WORKFLOW_REF} ${wf_fields[*]}"
+            echo -e "${YELLOW}[DRY-RUN]${NC} gh workflow run ${workflow} --ref ${WORKFLOW_REF} ${dispatch_fields[*]}"
         else
             print_info "执行: GitHub workflow dispatch API ${workflow} --ref ${WORKFLOW_REF} …"
             local payload response
-            payload="$(python3 - "${WORKFLOW_REF}" "${wf_fields[@]}" <<'PY'
+            payload="$(python3 - "${WORKFLOW_REF}" "${dispatch_fields[@]}" <<'PY'
 import json, sys
 inputs = {}
 args = sys.argv[2:]
@@ -577,15 +639,16 @@ PY
 
     # zhanlu_change start - publish once, only after every selected platform succeeds
     local npm_run_json="null"
-    if [[ "$GENERATE_ONLY" != true && "$DELIVERY_PROFILE" == "default" && ${#failed_workflows[@]} -eq 0 ]]; then
+    if [[ "$PUBLISH_NPM" == true && "$GENERATE_ONLY" != true && "$DELIVERY_PROFILE" == "default" && ${#failed_workflows[@]} -eq 0 ]]; then
         if [[ "$DRY_RUN" == true ]]; then
             print_info "[DRY-RUN] publish-package.yml waits for selected platform run IDs; release_kind=${RELEASE_KIND}, source_commit=${ZHANLU_DELIVERY_SOURCE_COMMIT}"
         else
             local npm_payload npm_response npm_run_id npm_run_url
             npm_payload="$(jq -cn --arg ref "${WORKFLOW_REF}" --arg version "${RELEASE_VERSION}" \
                 --arg kind "${RELEASE_KIND}" --arg source "${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
-                --arg request "${REQUEST_ID}" --argjson runs "${runs_json}" \
-                '{ref:$ref,inputs:{release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson)}}')"
+                --arg request "${REQUEST_ID}" --arg companion "${COMPUTER_USE_COMMIT}" --arg tag "${NPM_TAG}" \
+                --arg privateSource "${PRIVATE_SOURCE_REPOSITORY}" --arg companionRepo "${COMPANION_REPOSITORY}" --argjson runs "${runs_json}" \
+                '{ref:$ref,inputs:{publish_npm:true,release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson),companion_commit:$companion,npm_tag:$tag,private_source_repository:$privateSource,companion_repository:$companionRepo}}')"
             npm_run_id="" npm_run_url=""
             if npm_response="$(gh api "repos/${REPO}/actions/workflows/publish-package.yml/dispatches" \
                 --method POST -H "Accept: application/vnd.github+json" \
@@ -631,6 +694,24 @@ main() {
     check_gh_cli
     get_repo_info
     resolve_release_version
+    # zhanlu_change start - resolve mutable companion refs once before any release mutation
+    if [[ -n "${COMPUTER_USE_REF}" ]]; then
+        [[ "${COMPANION_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { print_error "Configure a private companion repository"; exit 1; }
+        local encoded_ref
+        encoded_ref="$(jq -rn --arg ref "${COMPUTER_USE_REF}" '$ref|@uri')"
+        COMPUTER_USE_COMMIT="$(gh api "repos/${COMPANION_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"
+    fi
+    if [[ -n "${COMPUTER_USE_COMMIT}" && ! "${COMPUTER_USE_COMMIT}" =~ ^[a-f0-9]{40}$ ]]; then print_error "Invalid companion commit"; exit 1; fi
+    if [[ "${PUBLISH_NPM}" == true ]]; then
+        [[ -n "${COMPUTER_USE_COMMIT}" && "$PLATFORM" == all && "$GENERATE_ONLY" == false && "$DELIVERY_PROFILE" == default && "$TRIGGER_MODE" == workflow ]] || { print_error "Joint npm requires a pinned companion, all platforms and default Release output"; exit 1; }
+        case "${NPM_TAG}:${RELEASE_VERSION}" in
+            ci1232:1.7.0-ci1232.*) ;;
+            latest:*) [[ "${RELEASE_KIND}" == formal ]] || { print_error "latest requires a stable formal version"; exit 1; } ;;
+            *) print_error "Invalid joint npm tag"; exit 1 ;;
+        esac
+    fi
+    # zhanlu_change end
+    pin_workflow_ref # zhanlu_change - never fan out a mutable ref or a bare commit SHA
     resolve_delivery_pin # zhanlu_change - pin profile source before creating/fanning out release jobs
     ensure_release_target # zhanlu_change - pre-create the exact release before dispatch
 

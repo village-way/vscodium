@@ -1,0 +1,62 @@
+name: Checkout build inputs
+description: Resolve independently selected private sources without exporting credentials.
+inputs:
+  source-repository:
+    required: true
+    description: Private primary source repository
+  source-ref:
+    required: true
+    description: Primary source ref or commit
+  source-key:
+    description: Scoped primary source deploy key
+  companion-repository:
+    description: Private optional source repository
+  companion-ref:
+    description: Optional source ref or commit
+  companion-key:
+    description: Separate optional source deploy key
+  app-client-id:
+    description: Read-only source App client id
+  app-key:
+    description: Source App private key
+  app-owner:
+    description: Source App installation owner
+  app-repositories:
+    description: Explicit App repository allowlist
+outputs:
+  source-commit:
+    description: Primary immutable source identity
+    value: ${{ steps.source.outputs.commit }}
+  companion-commit:
+    description: Optional immutable source identity
+    value: ${{ steps.companion.outputs.commit }}
+runs:
+  using: composite
+  steps:
+    - name: Create source read token
+      if: inputs.source-key == '' || (inputs.companion-ref != '' && inputs.companion-key == '')
+      id: token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.app-client-id }}
+        private-key: ${{ inputs.app-key }}
+        owner: ${{ inputs.app-owner }}
+        repositories: ${{ inputs.app-repositories }}
+        permission-contents: read
+    - uses: ./.build-entry/checkout-source
+      id: source
+      with:
+        repository: ${{ inputs.source-repository }}
+        ref: ${{ inputs.source-ref }}
+        path: build-source
+        deploy-key: ${{ inputs.source-key }}
+        token: ${{ steps.token.outputs.token }}
+    - uses: ./.build-entry/checkout-source
+      if: inputs.companion-ref != ''
+      id: companion
+      with:
+        repository: ${{ inputs.companion-repository }}
+        ref: ${{ inputs.companion-ref }}
+        path: companion-source
+        deploy-key: ${{ inputs.companion-key }}
+        token: ${{ steps.token.outputs.token }}

@@ -226,10 +226,48 @@ else
     UPDATE_EXISTING=false
 fi
 
+# zhanlu_change start - pinned builds may recover drafts but never rewrite published or unrelated releases
+if [[ -n "${RELEASE_WORKFLOW_COMMIT:-}" && "$UPDATE_EXISTING" == true ]]; then
+    [[ "$(gh release view "$VERSION" --repo "$ASSETS_REPOSITORY" --json isDraft --jq .isDraft)" == true ]] || { echo 'Published releases cannot be rebuilt; choose a new version' >&2; exit 1; }
+    existing_assets="$(gh release view "$VERSION" --repo "$ASSETS_REPOSITORY" --json assets --jq '.assets | map(.name)')"
+    if jq -e 'index("zhanlu-delivery.json") != null' <<<"$existing_assets" >/dev/null; then
+        metadata_dir="$(mktemp -d)"
+        if ! gh release download "$VERSION" --repo "$ASSETS_REPOSITORY" --pattern zhanlu-delivery.json --dir "$metadata_dir" >/dev/null 2>&1 || \
+            ! jq -e --arg version "$VERSION" --arg source "$ZHANLU_DELIVERY_SOURCE_COMMIT" --arg profile "$ZHANLU_DELIVERY_PROFILE" --arg digest "$ZHANLU_DELIVERY_PROFILE_DIGEST" --arg repository "$ASSETS_REPOSITORY" \
+                '.releaseVersion == $version and .sourceCommit == $source and .deliveryProfile == $profile and .profileDigest == $digest and .assetsRepository == $repository' "$metadata_dir/zhanlu-delivery.json" >/dev/null; then
+            rm -rf "$metadata_dir"
+            echo 'Existing draft belongs to another source/profile, or its metadata could not be verified' >&2
+            exit 1
+        fi
+        rm -rf "$metadata_dir"
+    elif [[ "$(jq length <<<"$existing_assets")" != 0 ]]; then
+        echo 'Existing draft assets have no verifiable source metadata' >&2
+        exit 1
+    fi
+fi
+# zhanlu_change end
+
 # 准备变量
 APP_NAME_LC="$( echo "${APP_NAME}" | awk '{print tolower($0)}' )"
 VERSION_CLEAN="${VERSION%-insider}"
 
+# zhanlu_change start - pinned orchestration never creates a release commit or moves its confirmed workflow branch
+if [[ -n "${RELEASE_WORKFLOW_COMMIT:-}" ]]; then
+    [[ "${RELEASE_WORKFLOW_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid workflow commit' >&2; exit 1; }
+    if tag_object="$(gh api "repos/${ASSETS_REPOSITORY}/git/ref/tags/${VERSION}" 2>/dev/null)"; then
+        tag_commit="$(jq -r '.object.sha' <<<"${tag_object}")"
+        if [[ "$(jq -r '.object.type' <<<"${tag_object}")" == tag ]]; then
+            tag_commit="$(gh api "repos/${ASSETS_REPOSITORY}/git/tags/${tag_commit}" --jq '.object.sha')"
+        fi
+        [[ "${tag_commit}" == "${RELEASE_WORKFLOW_COMMIT}" ]] || { echo 'Release tag already belongs to another workflow commit' >&2; exit 1; }
+    elif jq -e '(.status | tostring) == "404" or .message == "Not Found"' <<<"$tag_object" >/dev/null 2>&1; then
+        gh api --method POST "repos/${ASSETS_REPOSITORY}/git/refs" -f "ref=refs/tags/${VERSION}" -f "sha=${RELEASE_WORKFLOW_COMMIT}" >/dev/null
+    else
+        echo 'Release tag lookup failed; refusing to mutate references' >&2
+        exit 1
+    fi
+else
+# zhanlu_change end
 # 确保 tag 存在（如果不存在则创建）
 # zhanlu_change start - unique empty commit per new tag so GitHub Release created_at advances
 if ! secure_git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
@@ -247,6 +285,8 @@ if ! secure_git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
     echo "Tag ${VERSION} 已推送到远程仓库"
 fi
 # zhanlu_change end
+
+fi # zhanlu_change - end the legacy branch-mutating release path
 
 # 如果是 stable 版本，先使用 --generate-notes 生成自动的 release notes
 if [[ "${VSCODE_QUALITY}" == "stable" ]] && [[ "${UPDATE_EXISTING}" == "false" ]]; then

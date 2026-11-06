@@ -3,11 +3,16 @@ import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { releaseKind } from './release-kind.mjs';
 
-const workflows = new Set(['stable-macos.yml', 'stable-linux.yml', 'stable-windows.yml']);
+const workflows = new Set(['stable-macos.yml', 'stable-linux.yml', 'stable-windows.yml', 'build-companion.yml']);
 export function validateBatch(context) {
   if (!/^[0-9a-f]{40}$/.test(context.sourceCommit) || !/^[0-9a-f]{40}$/.test(context.workflowCommit) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(context.requestId)) throw new Error('Invalid release identity');
   releaseKind(context.version, context.kind);
-  if (!Array.isArray(context.runs) || !context.runs.length || context.runs.length > 3) throw new Error('Missing selected platform runs');
+  if (context.tag && !((context.tag === 'latest' && releaseKind(context.version, context.kind) === 'formal') ||
+      (context.tag === 'ci1232' && /^1\.7\.0-ci1232\.[1-9]\d*$/.test(context.version)))) throw new Error('Invalid joint npm channel');
+  const joint = Boolean(context.companionCommit);
+  if (joint && !/^[a-f0-9]{40}$/.test(context.companionCommit)) throw new Error('Invalid companion identity');
+  if (!Array.isArray(context.runs) || !context.runs.length || context.runs.length > (joint ? 4 : 3)) throw new Error('Missing selected platform runs');
+  if (joint && (context.runs.length !== 4 || ![...workflows].every(name => context.runs.some(run => run.workflow === name)))) throw new Error('Joint publication requires all platform runs');
   if (new Set(context.runs.map(run => run.workflow)).size !== context.runs.length || new Set(context.runs.map(run => run.runId)).size !== context.runs.length) throw new Error('Duplicate platform runs');
   for (const run of context.runs) if (!workflows.has(run.workflow) || !Number.isSafeInteger(run.runId) || run.runId <= 0) throw new Error('Invalid platform run');
 }
@@ -50,11 +55,29 @@ export async function waitForRelease(context, api, { sleep = ms => new Promise(r
   const asset = release.assets?.find(asset => asset.name === context.metadataAsset);
   if (!asset) throw new Error('Release delivery metadata is missing');
   verifyMetadata(context, await api(`/releases/assets/${asset.id}`, true));
+  if (context.companionCommit) {
+    const manifest = release.assets?.find(asset => asset.name === 'manifest.json');
+    const document = manifest ? await api(`/releases/assets/${manifest.id}`, true) : undefined;
+    const unified = document && ['sourceCommit', 'workflowCommit', 'complete', 'platforms'].some(key => Object.hasOwn(document, key));
+    const companion = unified ? manifest : release.assets?.find(asset => asset.name === 'computer-use-delivery.json');
+    if (!companion) throw new Error('Companion delivery metadata is missing');
+    const metadata = unified ? document : await api(`/releases/assets/${companion.id}`, true);
+    const expected = ['darwin-universal', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'];
+    const artifacts = unified && metadata.artifacts && !Array.isArray(metadata.artifacts) ? metadata.artifacts : undefined;
+    if (metadata.version !== context.version || metadata.sourceCommit !== context.companionCommit || metadata.workflowCommit !== context.workflowCommit || metadata.complete !== true ||
+        !Array.isArray(metadata.platforms) || metadata.platforms.length !== expected.length || !expected.every(name => metadata.platforms.includes(name)) ||
+        (unified ? metadata.schemaVersion !== 1 || !artifacts || Object.keys(artifacts).length !== expected.length || expected.some(name => {
+          const item = artifacts[name];
+          return !item || typeof item.file !== 'string' || !item.file || !Number.isSafeInteger(item.size) || item.size <= 0 || !/^[a-f0-9]{64}$/.test(item.sha256);
+        }) : metadata.artifacts?.length !== 5)) {
+      throw new Error('Companion delivery does not match the complete pinned batch');
+    }
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = process.env;
-  const context = { sourceCommit: env.SOURCE_COMMIT, requestId: env.REQUEST_ID, version: env.RELEASE_VERSION, kind: env.RELEASE_KIND, runs: JSON.parse(env.PLATFORM_RUNS || 'null'), repository: env.GITHUB_REPOSITORY, workflowCommit: env.PLATFORM_WORKFLOW_COMMIT || env.GITHUB_SHA, metadataAsset: env.RELEASE_METADATA_ASSET };
+  const context = { sourceCommit: env.SOURCE_COMMIT, companionCommit: env.COMPANION_COMMIT, tag: env.NPM_TAG, requestId: env.REQUEST_ID, version: env.RELEASE_VERSION, kind: env.RELEASE_KIND, runs: JSON.parse(env.PLATFORM_RUNS || 'null'), repository: env.GITHUB_REPOSITORY, workflowCommit: env.PLATFORM_WORKFLOW_COMMIT || env.GITHUB_SHA, metadataAsset: env.RELEASE_METADATA_ASSET };
   if (!context.metadataAsset) throw new Error('Configure RELEASE_METADATA_ASSET before publishing packages');
   const api = async (route, asset = false) => {
     const response = await fetch(`https://api.github.com/repos/${context.repository}${route}`, { headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: asset ? 'application/octet-stream' : 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10' }, signal: AbortSignal.timeout(30_000) });
