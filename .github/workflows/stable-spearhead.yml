@@ -21,8 +21,9 @@ on:
         default: '0'
       # zhanlu_change end
   schedule:
-    # Runs at 02:00 Beijing time (18:00 UTC).
-    - cron: '0 18 * * *'
+    # Request the daily build at 00:17 Japan Standard Time (15:17 UTC).
+    # Leave room for schedule delays and platform/package builds before 09:00 JST.
+    - cron: '17 15 * * *'
 
 # zhanlu_change start - the default token only reads this repository; releases use a scoped PAT
 permissions:
@@ -31,7 +32,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       APP_NAME: Zhanlu
       APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity

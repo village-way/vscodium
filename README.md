@@ -7,6 +7,15 @@ from a private source repository at run time. Releases here are staging drafts.
 
 Not accepting issues or pull requests.
 
+The daily stable build is scheduled for 00:17 Japan Standard Time (15:17 UTC),
+targeting completion by 09:00 JST. The off-hour minute avoids the top-of-hour
+scheduling peak. GitHub may delay scheduled events, so this is a best-effort
+target, not a guaranteed completion time.
+
+The `stable-spearhead` workflow only prepares the draft and dispatches builds.
+Check all three platform workflows and `publish-package.yml` for completion of
+the daily batch; a successful spearhead run alone does not mean it is complete.
+
 Source-bearing intermediate artifacts are encrypted with AES-256-GCM before
 upload. Configure `SOURCE_ARTIFACT_KEY` as a repository Actions secret containing
 32 cryptographically random bytes encoded as 64 hexadecimal characters. Do not
