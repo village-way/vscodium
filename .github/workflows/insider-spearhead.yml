@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       APP_NAME: Zhanlu # zhanlu_change - Insider keeps Zhanlu branding
       APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - prepare_vscode derives Ecloud.Zhanlu.Insiders
