@@ -25,7 +25,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
-      SOURCE_COMMIT: d2a8650df9469e5359f40598684a8eb5bf8447a0
+      SOURCE_COMMIT: b563644b0ce249916afd9ba734965816ed4b4db8
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
