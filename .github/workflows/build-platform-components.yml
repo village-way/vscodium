@@ -23,7 +23,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.platform == 'macos' && '[{"target":"darwin-x64","arch":"x64","runner":"macos-15-intel"},{"target":"darwin-arm64","arch":"arm64","runner":"macos-15"}]' || inputs.platform == 'windows' && '[{"target":"win32-x64","arch":"x64","runner":"windows-2022"},{"target":"win32-arm64","arch":"arm64","runner":"windows-11-arm"}]' || '[{"target":"linux-x64","arch":"x64","runner":"ubuntu-24.04"},{"target":"linux-arm64","arch":"arm64","runner":"ubuntu-24.04-arm"}]') }}
+        include: >-
+          ${{ fromJSON('{
+            "macos": [
+              {"target":"darwin-x64","arch":"x64","runner":"macos-15-intel"},
+              {"target":"darwin-arm64","arch":"arm64","runner":"macos-15"}
+            ],
+            "windows": [
+              {"target":"win32-x64","arch":"x64","runner":"windows-2022"},
+              {"target":"win32-arm64","arch":"arm64","runner":"windows-11-arm"}
+            ],
+            "linux": [
+              {"target":"linux-x64","arch":"x64","runner":"ubuntu-24.04"},
+              {"target":"linux-arm64","arch":"arm64","runner":"ubuntu-24.04-arm"}
+            ]
+          }')[inputs.platform] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
