@@ -190,13 +190,14 @@ test('failed fetch scrubs legacy remotes without writing or logging the canary t
   assert.equal(fs.existsSync(path.join(home, '.git-credentials')), false);
 });
 
-function subdirSourceFixture() {
+function subdirSourceFixture(extraFiles = []) {
   const cwd = temporary(), home = path.join(cwd, 'home'), source = path.join(cwd, 'origin');
   fs.mkdirSync(home);
   fs.cpSync(path.join(root, 'scripts'), path.join(cwd, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(root, 'fetch_source.sh'), path.join(cwd, 'fetch_source.sh'));
   for (const [name, content] of [['product.json', '{}\n'], ['kernel/README.md', 'kernel\n'],
-    ['packaging/get_repo.sh', 'echo packaged\n'], ['packaging/.nvmrc', '24\n'], ['packaging/upstream/stable.json', '{"tag":"1.0.0"}\n']]) {
+    ['packaging/get_repo.sh', 'echo packaged\n'], ['packaging/.nvmrc', '24\n'], ['packaging/upstream/stable.json', '{"tag":"1.0.0"}\n'],
+    ...extraFiles]) {
     fs.mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
     fs.writeFileSync(path.join(source, name), content);
   }
@@ -230,6 +231,19 @@ test('subdirectory source layout copies the build tree and reuses the fetched co
   const exported = fs.readFileSync(githubEnv, 'utf8');
   assert.match(exported, new RegExp(`^ZHANLU_CORE_GIT_DIR=.*\\.source-repo$`, 'm'));
   assert.match(exported, new RegExp(`^ZHANLU_CORE_REF=${commit}$`, 'm'));
+});
+
+test('v2 profile preflight resolves sibling inputs from the pinned tree before the kernel archive exists', { skip: !publicEntry }, () => {
+  const { cwd, invoke } = subdirSourceFixture([['packaging/scripts/prepare_delivery_profile.sh', [
+    'prepare_delivery_profile() {',
+    '  [[ "$(cat "$1/../kernel/README.md")" == "kernel" ]] || return 1',
+    '  ZHANLU_DELIVERY_ASSETS_REPOSITORY=example/build',
+    '}',
+    'cleanup_delivery_profile() { :; }',
+  ].join('\n')]]);
+  const result = invoke({ ZHANLU_DELIVERY_PROFILE: 'site', ZHANLU_DELIVERY_SCHEMA_VERSION: '2', ZHANLU_DELIVERY_PROFILE_DIGEST: 'f'.repeat(64) });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(fs.existsSync(path.join(cwd, '.source-repo/kernel')), false);
 });
 
 test('source fetch retries a transient failure and gives up after four attempts', { skip: !publicEntry }, () => {
