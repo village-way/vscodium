@@ -50,6 +50,15 @@ on:
         default: '0'
         options: ['0', '1']
       # zhanlu_change end
+      release_tag:
+        type: string
+        description: Immutable artifact release tag
+      profile_schema_version:
+        type: string
+        description: Delivery contract schema
+      delivery_build_options:
+        type: string
+        description: Frozen build options
       release_version:
         type: string
         description: Release/tag version to publish (optional)
@@ -79,6 +88,9 @@ env:
   ZHANLU_DELIVERY_PROFILE_DIGEST: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.profile_digest || github.event.client_payload.profile_digest || '' }} # zhanlu_change
   ZHANLU_CORE_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.zhanlu_core_ref || github.event.client_payload.zhanlu_core_ref || '' }}
   ZHANLU_BUNDLE_CODEX_RUNTIME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bundle_codex_runtime || github.event.client_payload.bundle_codex_runtime || '0' }} # zhanlu_change
+  RELEASE_TAG: ${{ inputs.release_tag || github.event.client_payload.release_tag || '' }}
+  ZHANLU_DELIVERY_SCHEMA_VERSION: ${{ inputs.profile_schema_version || github.event.client_payload.profile_schema_version || '1' }}
+  ZHANLU_DELIVERY_BUILD_OPTIONS: ${{ inputs.delivery_build_options || github.event.client_payload.delivery_build_options || '' }}
   RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version || github.event.client_payload.release_version || '' }}
   VERSION_TIME_PATCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_time_patch || github.event.client_payload.version_time_patch || '' }}
   RELEASE_VERSION_EXPLICIT: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.release_version) || (github.event_name == 'repository_dispatch' && github.event.client_payload.release_version)) && 'yes' || 'no' }}
@@ -120,6 +132,10 @@ jobs:
           repositories: ${{ vars.SOURCE_APP_REPOSITORIES || '__missing_source_repository_configuration__' }}
           permission-contents: read
       # zhanlu_change end
+
+      - name: Restore frozen delivery endpoint
+        if: env.ZHANLU_DELIVERY_SCHEMA_VERSION == '2'
+        run: node .build-entry/prepare-delivery-endpoint.mjs
 
       - name: Fetch source code from private repository
         env:
@@ -219,9 +235,9 @@ jobs:
         if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'yes'
 
       # zhanlu_change start - protect workflow-only delivery without altering install packages
-      - name: Encrypt delivery artifact
+      - name: Prepare delivery artifact
         env:
-          SOURCE_ARTIFACT_KEY: ${{ secrets.SOURCE_ARTIFACT_KEY }}
+          SOURCE_ARTIFACT_KEY: ${{ env.ZHANLU_DELIVERY_SCHEMA_VERSION != '2' && secrets.SOURCE_ARTIFACT_KEY || '' }}
         run: bash scripts/protect-delivery-artifact.sh
         if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true'
       # zhanlu_change end
@@ -230,7 +246,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bin-${{ matrix.vscode_arch }}
-          path: delivery-assets.tar.enc # zhanlu_change - no plaintext delivery archives
+          path: ${{ env.ZHANLU_DELIVERY_SCHEMA_VERSION == '2' && 'assets/*' || 'delivery-assets.tar.enc' }}
           retention-days: 3
           if-no-files-found: error # zhanlu_change - reject missing ciphertext
         if: env.SHOULD_BUILD == 'yes' && env.SHOULD_DEPLOY == 'no' && github.event.inputs.generate_assets == 'true' # zhanlu_change - release assets stay in the release only

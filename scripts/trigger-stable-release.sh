@@ -47,6 +47,7 @@ ZHANLU_CORE_REF=""
 ZHANLU_BUNDLE_CODEX_RUNTIME="${ZHANLU_BUNDLE_CODEX_RUNTIME:-0}" # zhanlu_change
 # Release 版本：为空时触发前只解析一次，随后传给所有 workflow
 RELEASE_VERSION="${RELEASE_VERSION:-}"
+RELEASE_TAG="${RELEASE_TAG:-}" # zhanlu_change - optional independent GitHub target
 # 内部 VS Code 兼容版本的 4 位补丁号；为空时 zhanlu-code 会从 RELEASE_VERSION 派生
 VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
 REQUEST_ID=""
@@ -197,6 +198,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         # zhanlu_change end
+        # zhanlu_change start - forward independent v2 delivery targeting
+        --release-tag)
+            RELEASE_TAG="$2"; shift 2 ;;
+        --profile-schema-version)
+            ZHANLU_DELIVERY_SCHEMA_VERSION="$2"; shift 2 ;;
+        # zhanlu_change end
         --delivery-profile)
             DELIVERY_PROFILE="$2"
             shift 2
@@ -343,6 +350,22 @@ resolve_delivery_pin() {
     local local_metadata_matches=false
     local repository_hint="${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-}"
     metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/zhanlu-release-metadata.XXXXXX")"
+    # v2 never replaces a confirmed source or digest with target metadata
+    if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" ]]; then
+        prepare_release_delivery_profile "${SOURCE_BRANCH}" "${DELIVERY_PROFILE}" "${REPO}"
+        expected_tag="${DELIVERY_PROFILE}-v${RELEASE_VERSION}"
+        RELEASE_TAG="${RELEASE_TAG:-${expected_tag}}"
+        [[ "${RELEASE_TAG}" == "${expected_tag}" ]] || { print_error 'Release tag does not match profile/version'; return 1; }
+        export RELEASE_TAG
+        if [[ "${GENERATE_ONLY}" != true ]] && gh release download "${RELEASE_TAG}" \
+            --repo "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" --pattern zhanlu-delivery.json --dir "${metadata_dir}" >/dev/null 2>&1; then
+            assert_release_delivery_metadata "${metadata_dir}/zhanlu-delivery.json" || { rm -rf "${metadata_dir}"; return 1; }
+        fi
+        rm -rf "${metadata_dir}"
+        return
+    fi
+    RELEASE_TAG="${RELEASE_TAG:-${RELEASE_VERSION}}"
+    export RELEASE_TAG
 
     # Workflow-artifact builds do not use a GitHub Release. Resolve and validate
     # the requested Profile directly so stale release metadata in the persistent
@@ -368,7 +391,7 @@ resolve_delivery_pin() {
         repository_hint="${REPO}"
     fi
 
-    if [[ -n "${repository_hint}" ]] && gh release download "${RELEASE_VERSION}" \
+    if [[ -n "${repository_hint}" ]] && gh release download "${RELEASE_TAG}" \
         --repo "${repository_hint}" \
         --pattern zhanlu-delivery.json \
         --dir "${metadata_dir}" >/dev/null 2>&1; then
@@ -403,7 +426,7 @@ resolve_delivery_pin() {
         print_info "复用 Release 中固定的 zhanlu-code commit: ${ZHANLU_DELIVERY_SOURCE_COMMIT}"
     else
         resolve_release_delivery_profile "${SOURCE_BRANCH}" "${DELIVERY_PROFILE}" "${REPO}"
-        if gh release download "${RELEASE_VERSION}" \
+        if gh release download "${RELEASE_TAG}" \
             --repo "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" \
             --pattern zhanlu-delivery.json \
             --dir "${metadata_dir}" >/dev/null 2>&1; then
@@ -489,7 +512,7 @@ ensure_release_target() {
     fi
 
     local existing_is_draft
-    if existing_is_draft=$(gh release view "${RELEASE_VERSION}" --repo "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null); then
+    if existing_is_draft=$(gh release view "${RELEASE_TAG}" --repo "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null); then
         if [[ "${wants_draft}" == true && "${existing_is_draft}" != true ]]; then
             print_error "Release ${RELEASE_VERSION} 已正式发布，拒绝在触发构建时自动改回 draft"
             print_error "请指定新的 --release-version，或先显式执行 gh release edit ${RELEASE_VERSION} --repo ${ZHANLU_DELIVERY_ASSETS_REPOSITORY} --draft"
@@ -563,6 +586,14 @@ trigger_workflow() {
     wf_fields+=(-f "profile_digest=${ZHANLU_DELIVERY_PROFILE_DIGEST}")
     wf_fields+=(-f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}")
     wf_fields+=(-f "release_version=${RELEASE_VERSION}")
+    # zhanlu_change start - only the new contract requires extended workflow inputs
+    if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" ]]; then
+        wf_fields+=(-f "release_tag=${RELEASE_TAG}" -f "profile_schema_version=2"
+            -f "delivery_build_options=${ZHANLU_DELIVERY_BUILD_OPTIONS:?missing confirmed build options}")
+    elif [[ "${RELEASE_TAG}" != "${RELEASE_VERSION}" ]]; then
+        wf_fields+=(-f "release_tag=${RELEASE_TAG}")
+    fi
+    # zhanlu_change end
     wf_fields+=(-f "bundle_codex_runtime=${ZHANLU_BUNDLE_CODEX_RUNTIME}")
     if [[ -n "${REQUEST_ID}" ]]; then
         wf_fields+=(-f "portal_request_id=${REQUEST_ID}")
@@ -593,6 +624,13 @@ trigger_workflow() {
                 -f "companion_commit=${COMPUTER_USE_COMMIT}" -f "platform=${PLATFORM}"
                 -f "generate_assets=${GENERATE_ONLY}" -f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
                 -f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}" -f "companion_repository=${COMPANION_REPOSITORY}")
+            if [[ "${RELEASE_TAG}" != "${RELEASE_VERSION}" ]]; then
+                dispatch_fields+=(-f "release_tag=${RELEASE_TAG}")
+                if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" ]]; then
+                    dispatch_fields+=(-f "profile_digest=${ZHANLU_DELIVERY_PROFILE_DIGEST}"
+                        -f "delivery_build_options=${ZHANLU_DELIVERY_BUILD_OPTIONS}")
+                fi
+            fi
         fi
         # zhanlu_change end
         print_info "触发工作流: $workflow"

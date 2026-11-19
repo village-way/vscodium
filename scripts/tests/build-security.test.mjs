@@ -434,12 +434,16 @@ test('delivery artifact preserves nested runtime configuration only inside authe
 test('draft release delivery never duplicates plaintext assets into workflow artifacts', () => {
   for (const name of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => /^(stable|insider)-(linux|macos|windows)\.yml$/.test(name))) {
     const workflow = fs.readFileSync(path.join(root, '.github/workflows', name), 'utf8').replaceAll('\r\n', '\n');
-    const blocks = workflow.split(/(?=      - name: Encrypt delivery artifact)/).slice(1);
+    const blocks = workflow.split(/(?=      - name: (?:Encrypt|Prepare) delivery artifact)/).slice(1);
     assert.ok(blocks.length > 0, name);
     for (const section of blocks) {
       const block = section.split(/\n(?:  [\w-]+:|      - name: (?!Upload assets))/)[0];
       assert.match(block, /run: bash scripts\/protect-delivery-artifact.sh/);
-      assert.match(block, /path: delivery-assets\.tar\.enc/);
+      if (name.startsWith('stable-')) {
+        assert.match(block, /path: \$\{\{ env\.ZHANLU_DELIVERY_SCHEMA_VERSION == '2' && 'assets\/\*' \|\| 'delivery-assets\.tar\.enc' \}\}/);
+      } else {
+        assert.match(block, /path: delivery-assets\.tar\.enc/);
+      }
       assert.match(block, /if-no-files-found: error/);
       const conditions = [...block.matchAll(/^        if: (.+?)(?: #.*)?$/gm)].map(match => match[1]);
       assert.equal(conditions.length, 2, name);
