@@ -62,6 +62,7 @@ on:
 run-name: stable-windows · ${{ inputs.release_version || github.event.client_payload.release_version || 'auto' }} · ${{ inputs.portal_request_id || github.event.client_payload.portal_request_id || github.run_id }}
 
 env:
+  ZL_OFFICE_COMPONENT_PUBLIC_KEYS: ${{ vars.PLATFORM_COMPONENT_PUBLIC_KEYS }}
   GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }} # zhanlu_change - wrapper checkout follows the triggering ref
   APP_NAME: Zhanlu
   APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
@@ -587,3 +588,22 @@ jobs:
   # zhanlu_change start - upstream also publishes to WinGet from this workflow; this fork distributes the
   # signed installers through its own channels, so that job is not carried here.
   # zhanlu_change end
+
+
+  platform_components:
+    needs: [check, build]
+    if: needs.check.outputs.SHOULD_DEPLOY == 'yes' || inputs.generate_assets
+    uses: ./.github/workflows/build-platform-components.yml
+    with:
+      platform: windows
+      source_commit: ${{ needs.check.outputs.MS_COMMIT }}
+      source_repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+      source_subdir: ${{ vars.SOURCE_SUBDIR || '' }}
+      assets_repository: ${{ inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }}
+      release_version: ${{ needs.check.outputs.RELEASE_VERSION }}
+      generate_assets: ${{ inputs.generate_assets || false }}
+    secrets:
+      source_key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+      app_key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+      signing_key: ${{ secrets.PLATFORM_COMPONENT_SIGNING_KEY }}
+      release_token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
