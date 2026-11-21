@@ -65,6 +65,12 @@ while [[ $# -gt 0 ]]; do
             SOURCE_BRANCH="$2"
             shift 2
             ;;
+        # zhanlu_change start - accept an independent GitHub release tag
+        --release-tag)
+            RELEASE_TAG="$2"
+            shift 2
+            ;;
+        # zhanlu_change end
         --delivery-profile)
             ZHANLU_DELIVERY_PROFILE="$2"
             shift 2
@@ -180,6 +186,17 @@ fi
 source "${SCRIPT_DIR}/scripts/resolve-release-delivery-profile.sh"
 prepare_release_delivery_profile "${SOURCE_BRANCH}" "${ZHANLU_DELIVERY_PROFILE}" "${ASSETS_REPOSITORY}"
 ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
+# product version and GitHub tag are independent for offline profiles
+if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" ]]; then
+    expected_tag="${ZHANLU_DELIVERY_PROFILE}-v${VERSION}"
+    RELEASE_TAG="${RELEASE_TAG:-${expected_tag}}"
+    [[ "${RELEASE_TAG}" == "${expected_tag}" ]] || { echo 'v2 release tag does not match profile/version' >&2; exit 1; }
+    [[ -n "${RELEASE_WORKFLOW_COMMIT:-}" ]] || { echo 'v2 requires the confirmed workflow commit' >&2; exit 1; }
+else
+    RELEASE_TAG="${RELEASE_TAG:-${VERSION}}"
+fi
+[[ "${RELEASE_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$ && "${RELEASE_TAG}" != *..* ]] || { echo 'Invalid release tag' >&2; exit 1; }
+export RELEASE_TAG
 
 upload_delivery_metadata() {
     local metadata_dir
@@ -190,7 +207,7 @@ upload_delivery_metadata() {
     mkdir -p "${SCRIPT_DIR}/.zhanlu"
     cp "${metadata}" "${SCRIPT_DIR}/.zhanlu/release-delivery.json"
     chmod 600 "${SCRIPT_DIR}/.zhanlu/release-delivery.json"
-    gh release upload "${VERSION}" "${metadata}" --repo "${ASSETS_REPOSITORY}" --clobber
+    gh release upload "${RELEASE_TAG}" "${metadata}" --repo "${ASSETS_REPOSITORY}" --clobber
     rm -rf "${metadata_dir}"
 }
 # zhanlu_change end
@@ -218,7 +235,7 @@ esac
 # zhanlu_change end
 
 # 检查 release 是否已存在
-if gh release view "${VERSION}" --repo "${ASSETS_REPOSITORY}" &>/dev/null; then
+if gh release view "${RELEASE_TAG}" --repo "${ASSETS_REPOSITORY}" &>/dev/null; then # zhanlu_change
     echo "Release ${VERSION} 已存在，将更新 release notes"
     UPDATE_EXISTING=true
 else
@@ -228,16 +245,19 @@ fi
 
 # zhanlu_change start - pinned builds may recover drafts but never rewrite published or unrelated releases
 if [[ -n "${RELEASE_WORKFLOW_COMMIT:-}" && "$UPDATE_EXISTING" == true ]]; then
-    [[ "$(gh release view "$VERSION" --repo "$ASSETS_REPOSITORY" --json isDraft --jq .isDraft)" == true ]] || { echo 'Published releases cannot be rebuilt; choose a new version' >&2; exit 1; }
-    existing_assets="$(gh release view "$VERSION" --repo "$ASSETS_REPOSITORY" --json assets --jq '.assets | map(.name)')"
+    [[ "$(gh release view "$RELEASE_TAG" --repo "$ASSETS_REPOSITORY" --json isDraft --jq .isDraft)" == true ]] || { echo 'Published releases cannot be rebuilt; choose a new version' >&2; exit 1; }
+    existing_assets="$(gh release view "$RELEASE_TAG" --repo "$ASSETS_REPOSITORY" --json assets --jq '.assets | map(.name)')"
     if jq -e 'index("zhanlu-delivery.json") != null' <<<"$existing_assets" >/dev/null; then
         metadata_dir="$(mktemp -d)"
-        if ! gh release download "$VERSION" --repo "$ASSETS_REPOSITORY" --pattern zhanlu-delivery.json --dir "$metadata_dir" >/dev/null 2>&1 || \
+        if ! gh release download "$RELEASE_TAG" --repo "$ASSETS_REPOSITORY" --pattern zhanlu-delivery.json --dir "$metadata_dir" >/dev/null 2>&1 || \
             ! jq -e --arg version "$VERSION" --arg source "$ZHANLU_DELIVERY_SOURCE_COMMIT" --arg profile "$ZHANLU_DELIVERY_PROFILE" --arg digest "$ZHANLU_DELIVERY_PROFILE_DIGEST" --arg repository "$ASSETS_REPOSITORY" \
                 '.releaseVersion == $version and .sourceCommit == $source and .deliveryProfile == $profile and .profileDigest == $digest and .assetsRepository == $repository' "$metadata_dir/zhanlu-delivery.json" >/dev/null; then
             rm -rf "$metadata_dir"
             echo 'Existing draft belongs to another source/profile, or its metadata could not be verified' >&2
             exit 1
+        fi
+        if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" ]]; then
+            assert_release_delivery_metadata "$metadata_dir/zhanlu-delivery.json" || { rm -rf "$metadata_dir"; exit 1; }
         fi
         rm -rf "$metadata_dir"
     elif [[ "$(jq length <<<"$existing_assets")" != 0 ]]; then
@@ -254,14 +274,14 @@ VERSION_CLEAN="${VERSION%-insider}"
 # zhanlu_change start - pinned orchestration never creates a release commit or moves its confirmed workflow branch
 if [[ -n "${RELEASE_WORKFLOW_COMMIT:-}" ]]; then
     [[ "${RELEASE_WORKFLOW_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid workflow commit' >&2; exit 1; }
-    if tag_object="$(gh api "repos/${ASSETS_REPOSITORY}/git/ref/tags/${VERSION}" 2>/dev/null)"; then
+    if tag_object="$(gh api "repos/${ASSETS_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" 2>/dev/null)"; then
         tag_commit="$(jq -r '.object.sha' <<<"${tag_object}")"
         if [[ "$(jq -r '.object.type' <<<"${tag_object}")" == tag ]]; then
             tag_commit="$(gh api "repos/${ASSETS_REPOSITORY}/git/tags/${tag_commit}" --jq '.object.sha')"
         fi
         [[ "${tag_commit}" == "${RELEASE_WORKFLOW_COMMIT}" ]] || { echo 'Release tag already belongs to another workflow commit' >&2; exit 1; }
     elif jq -e '(.status | tostring) == "404" or .message == "Not Found"' <<<"$tag_object" >/dev/null 2>&1; then
-        gh api --method POST "repos/${ASSETS_REPOSITORY}/git/refs" -f "ref=refs/tags/${VERSION}" -f "sha=${RELEASE_WORKFLOW_COMMIT}" >/dev/null
+        gh api --method POST "repos/${ASSETS_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_TAG}" -f "sha=${RELEASE_WORKFLOW_COMMIT}" >/dev/null
     else
         echo 'Release tag lookup failed; refusing to mutate references' >&2
         exit 1
@@ -270,18 +290,18 @@ else
 # zhanlu_change end
 # 确保 tag 存在（如果不存在则创建）
 # zhanlu_change start - unique empty commit per new tag so GitHub Release created_at advances
-if ! secure_git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
+if ! secure_git ls-remote --tags origin | grep -q "refs/tags/${RELEASE_TAG}$"; then
     echo "远程仓库不存在 tag: ${VERSION}，正在创建..."
-    if git rev-parse "${VERSION}" &>/dev/null; then
+    if git rev-parse "${RELEASE_TAG}" &>/dev/null; then
         echo "本地已存在 tag: ${VERSION}，将直接推送到远程"
     else
         # GitHub sets release created_at from the tagged commit date, not draft/upload time.
         echo "创建 empty commit，使 Release created_at 对应该发版时刻..."
         git commit --allow-empty -m "release: ${VERSION}"
         secure_git push origin HEAD
-        git tag "${VERSION}"
+        git tag "${RELEASE_TAG}"
     fi
-    secure_git push origin "${VERSION}"
+    secure_git push origin "${RELEASE_TAG}"
     echo "Tag ${VERSION} 已推送到远程仓库"
 fi
 # zhanlu_change end
@@ -291,14 +311,16 @@ fi # zhanlu_change - end the legacy branch-mutating release path
 # 如果是 stable 版本，先使用 --generate-notes 生成自动的 release notes
 if [[ "${VSCODE_QUALITY}" == "stable" ]] && [[ "${UPDATE_EXISTING}" == "false" ]]; then
     echo "生成自动 release notes..."
-    gh release create "${VERSION}" \
+    # zhanlu_change start - locate the independent release without changing its version
+    gh release create "${RELEASE_TAG}" \
         --repo "${ASSETS_REPOSITORY}" \
         --title "${VERSION}" \
         --generate-notes \
         "${DRAFT_FLAG}" # zhanlu_change - honor RELEASE_DRAFT
 
     # 获取自动生成的 release notes
-    RELEASE_NOTES=$( gh release view "${VERSION}" --repo "${ASSETS_REPOSITORY}" --json "body" --jq ".body" )
+    RELEASE_NOTES=$( gh release view "${RELEASE_TAG}" --repo "${ASSETS_REPOSITORY}" --json "body" --jq ".body" )
+    # zhanlu_change end
 else
     # Insider 版本或更新现有 release
     RELEASE_NOTES=""
@@ -306,7 +328,7 @@ fi
 
 # zhanlu_change start - create new Insider releases before rendering their notes
 if [[ "${VSCODE_QUALITY}" == "insider" ]] && [[ "${UPDATE_EXISTING}" == "false" ]]; then
-    gh release create "${VERSION}" \
+    gh release create "${RELEASE_TAG}" \
         --repo "${ASSETS_REPOSITORY}" \
         --title "${VERSION}" \
         --notes "Preparing ${VERSION} release assets." \
@@ -333,7 +355,7 @@ if [[ -z "${RELEASE_NOTES_TEMPLATE}" ]]; then # zhanlu_change - resolve the note
         NOTES="${RELEASE_NOTES:-Release ${VERSION}}"
     fi
 
-    gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}" "${DRAFT_FLAG}" # zhanlu_change - update notes and visibility together
+    gh release edit "${RELEASE_TAG}" --repo "${ASSETS_REPOSITORY}" --notes "${NOTES}" "${DRAFT_FLAG}" # zhanlu_change - update notes and visibility together
     upload_delivery_metadata # zhanlu_change
     [[ -n "${SYNC_GITLAB}" ]] && sync_gitlab_releases
     echo "RELEASE_VERSION=${VERSION}" # zhanlu_change - spearhead parses this when release_notes.md is absent
@@ -354,6 +376,7 @@ PY
 # zhanlu_change end
 
 # 替换模板中的占位符
+replace "s|@@RELEASE_TAG@@|${RELEASE_TAG}|g" "${RELEASE_NOTES_FILE}" # zhanlu_change
 if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
     replace "s|@@APP_NAME@@|${APP_NAME}|g" "${RELEASE_NOTES_FILE}"
     replace "s|@@APP_NAME_LC@@|${APP_NAME_LC}|g" "${RELEASE_NOTES_FILE}"
@@ -409,7 +432,7 @@ printf '\n<!-- zhanlu-delivery %s -->\n' "${DELIVERY_METADATA_JSON}" >> "${RELEA
 # zhanlu_change end
 
 echo "更新 Release notes..."
-gh release edit "${VERSION}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}" "${DRAFT_FLAG}"
+gh release edit "${RELEASE_TAG}" --repo "${ASSETS_REPOSITORY}" --notes-file "${RELEASE_NOTES_FILE}" "${DRAFT_FLAG}" # zhanlu_change
 upload_delivery_metadata # zhanlu_change - platform triggers reuse this exact pin
 
 if [[ -n "${SYNC_GITLAB}" ]]; then

@@ -274,7 +274,7 @@ done
 # 设置脚本可执行权限
 echo ""
 echo "Setting executable permissions..."
-find "${_SCRIPT_DIR}" -type f -name "*.sh" -exec chmod +x {} \;
+find "${_SCRIPT_DIR}" -path "${SOURCE_DIR}" -prune -o -type f -name "*.sh" -exec chmod +x {} +
 
 # zhanlu_change start - validate profile digest and allowlisted release target against the exact fetched commit
 if [[ "${ZHANLU_DELIVERY_PROFILE:-default}" == "default" && -n "${GITHUB_ACTIONS:-}" && "${ASSETS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" != "${GITHUB_REPOSITORY:-}" ]]; then
@@ -282,15 +282,25 @@ if [[ "${ZHANLU_DELIVERY_PROFILE:-default}" == "default" && -n "${GITHUB_ACTIONS
     exit 1
 elif [[ "${ZHANLU_DELIVERY_PROFILE:-default}" != "default" ]]; then
     EXPECTED_ASSETS_REPOSITORY="${ASSETS_REPOSITORY:-}"
+    PROFILE_SCRIPT_ROOT="${_SCRIPT_DIR}"
+    if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" && -n "${SOURCE_SUBDIR}" ]]; then
+        # The profile can import contracts and plugins alongside the packaging directory.
+        # Validate in the pinned source layout before the kernel archive exists.
+        git -C "${SOURCE_DIR}" sparse-checkout disable
+        PROFILE_SCRIPT_ROOT="${SOURCE_ROOT}"
+    fi
     # shellcheck disable=SC1091
-    source "${_SCRIPT_DIR}/scripts/prepare_delivery_profile.sh"
-    prepare_delivery_profile "${_SCRIPT_DIR}"
+    source "${PROFILE_SCRIPT_ROOT}/scripts/prepare_delivery_profile.sh"
+    prepare_delivery_profile "${PROFILE_SCRIPT_ROOT}"
     if [[ -z "${EXPECTED_ASSETS_REPOSITORY}" || "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" != "${EXPECTED_ASSETS_REPOSITORY}" ]]; then
         echo "Error: delivery assets repository ${EXPECTED_ASSETS_REPOSITORY:-<missing>} does not match allowlisted profile target ${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" >&2
         cleanup_delivery_profile
         exit 1
     fi
     cleanup_delivery_profile
+    if [[ "${PROFILE_SCRIPT_ROOT}" == "${SOURCE_ROOT}" ]]; then
+        git -C "${SOURCE_DIR}" sparse-checkout set --cone "${SOURCE_SUBDIR}"
+    fi
     unset ZHANLU_DELIVERY_PLUGINS_DIR ZHANLU_DELIVERY_STAGING_DIR
 fi
 # zhanlu_change end

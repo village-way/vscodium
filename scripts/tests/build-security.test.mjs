@@ -190,13 +190,14 @@ test('failed fetch scrubs legacy remotes without writing or logging the canary t
   assert.equal(fs.existsSync(path.join(home, '.git-credentials')), false);
 });
 
-function subdirSourceFixture() {
+function subdirSourceFixture(extraFiles = []) {
   const cwd = temporary(), home = path.join(cwd, 'home'), source = path.join(cwd, 'origin');
   fs.mkdirSync(home);
   fs.cpSync(path.join(root, 'scripts'), path.join(cwd, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(root, 'fetch_source.sh'), path.join(cwd, 'fetch_source.sh'));
   for (const [name, content] of [['product.json', '{}\n'], ['kernel/README.md', 'kernel\n'],
-    ['packaging/get_repo.sh', 'echo packaged\n'], ['packaging/.nvmrc', '24\n'], ['packaging/upstream/stable.json', '{"tag":"1.0.0"}\n']]) {
+    ['packaging/get_repo.sh', 'echo packaged\n'], ['packaging/.nvmrc', '24\n'], ['packaging/upstream/stable.json', '{"tag":"1.0.0"}\n'],
+    ...extraFiles]) {
     fs.mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
     fs.writeFileSync(path.join(source, name), content);
   }
@@ -230,6 +231,19 @@ test('subdirectory source layout copies the build tree and reuses the fetched co
   const exported = fs.readFileSync(githubEnv, 'utf8');
   assert.match(exported, new RegExp(`^ZHANLU_CORE_GIT_DIR=.*\\.source-repo$`, 'm'));
   assert.match(exported, new RegExp(`^ZHANLU_CORE_REF=${commit}$`, 'm'));
+});
+
+test('v2 profile preflight resolves sibling inputs from the pinned tree before the kernel archive exists', { skip: !publicEntry }, () => {
+  const { cwd, invoke } = subdirSourceFixture([['packaging/scripts/prepare_delivery_profile.sh', [
+    'prepare_delivery_profile() {',
+    '  [[ "$(cat "$1/../kernel/README.md")" == "kernel" ]] || return 1',
+    '  ZHANLU_DELIVERY_ASSETS_REPOSITORY=example/build',
+    '}',
+    'cleanup_delivery_profile() { :; }',
+  ].join('\n')]]);
+  const result = invoke({ ZHANLU_DELIVERY_PROFILE: 'site', ZHANLU_DELIVERY_SCHEMA_VERSION: '2', ZHANLU_DELIVERY_PROFILE_DIGEST: 'f'.repeat(64) });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(fs.existsSync(path.join(cwd, '.source-repo/kernel')), false);
 });
 
 test('source fetch retries a transient failure and gives up after four attempts', { skip: !publicEntry }, () => {
@@ -434,12 +448,16 @@ test('delivery artifact preserves nested runtime configuration only inside authe
 test('draft release delivery never duplicates plaintext assets into workflow artifacts', () => {
   for (const name of fs.readdirSync(path.join(root, '.github/workflows')).filter(name => /^(stable|insider)-(linux|macos|windows)\.yml$/.test(name))) {
     const workflow = fs.readFileSync(path.join(root, '.github/workflows', name), 'utf8').replaceAll('\r\n', '\n');
-    const blocks = workflow.split(/(?=      - name: Encrypt delivery artifact)/).slice(1);
+    const blocks = workflow.split(/(?=      - name: (?:Encrypt|Prepare) delivery artifact)/).slice(1);
     assert.ok(blocks.length > 0, name);
     for (const section of blocks) {
       const block = section.split(/\n(?:  [\w-]+:|      - name: (?!Upload assets))/)[0];
       assert.match(block, /run: bash scripts\/protect-delivery-artifact.sh/);
-      assert.match(block, /path: delivery-assets\.tar\.enc/);
+      if (name.startsWith('stable-')) {
+        assert.match(block, /path: \$\{\{ env\.ZHANLU_DELIVERY_SCHEMA_VERSION == '2' && 'assets\/\*' \|\| 'delivery-assets\.tar\.enc' \}\}/);
+      } else {
+        assert.match(block, /path: delivery-assets\.tar\.enc/);
+      }
       assert.match(block, /if-no-files-found: error/);
       const conditions = [...block.matchAll(/^        if: (.+?)(?: #.*)?$/gm)].map(match => match[1]);
       assert.equal(conditions.length, 2, name);

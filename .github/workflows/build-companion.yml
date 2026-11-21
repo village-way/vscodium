@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       portal_request_id: {type: string, required: true}
+      release_tag: {type: string}
+      profile_digest: {type: string}
+      delivery_build_options: {type: string}
       release_version: {type: string, required: true}
       release_kind: {type: choice, options: [auto, formal, development], default: auto}
       source_commit: {type: string, required: true}
@@ -19,6 +22,9 @@ permissions:
   contents: read
 env:
   SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  ZHANLU_DELIVERY_PROFILE_DIGEST: ${{ inputs.profile_digest }}
+  ZHANLU_DELIVERY_BUILD_OPTIONS: ${{ inputs.delivery_build_options }}
   RELEASE_VERSION: ${{ inputs.release_version }}
   COMPANION_COMMIT: ${{ inputs.companion_commit }}
   COMPANION_WINDOWS_PUBLISHER: ${{ vars.COMPANION_WINDOWS_PUBLISHER }}

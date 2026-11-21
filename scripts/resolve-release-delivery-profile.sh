@@ -2,6 +2,21 @@
 # shellcheck shell=bash
 
 resolve_release_delivery_profile() {
+    # The portal already checked the source data with image-pinned tooling.
+    # Read the confirmed snapshot without loading any scripts from the selected build source.
+    if [[ -n "${ZL_FROZEN_DELIVERY_FILE:-}" ]]; then
+        local file="${ZL_FROZEN_DELIVERY_FILE}"
+        jq -e --arg profile "$2" --arg sha "${ZHANLU_DELIVERY_SOURCE_COMMIT:?}" --arg digest "${ZHANLU_DELIVERY_PROFILE_DIGEST:?}" \
+          '.schemaVersion == 2 and .id == $profile and .sourceCommit == $sha and .profileDigest == $digest' "$file" >/dev/null || return 1
+        ZHANLU_DELIVERY_SCHEMA_VERSION=2
+        ZHANLU_DELIVERY_PROFILE="$2"
+        ZHANLU_DELIVERY_ASSETS_REPOSITORY="$(jq -er '.assetsRepository' "$file")" || return 1
+        ZHANLU_DELIVERY_CONFIG="$(jq -ec '.deliveryConfig' "$file")" || return 1
+        ZHANLU_DELIVERY_EXPECTED_ASSETS="$(jq -ec '.expectedAssets' "$file")" || return 1
+        export ZHANLU_DELIVERY_SCHEMA_VERSION ZHANLU_DELIVERY_PROFILE ZHANLU_DELIVERY_CONFIG
+        export ZHANLU_DELIVERY_ASSETS_REPOSITORY ZHANLU_DELIVERY_EXPECTED_ASSETS
+        return 0
+    fi
     if [[ -n "${SOURCE_CHECKOUT_ROOT:-}" ]]; then
         if [[ -n "${SOURCE_SUBDIR:-}" && ! "${SOURCE_SUBDIR}" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$ ]]; then
             echo 'Invalid source layout.' >&2
@@ -14,7 +29,7 @@ resolve_release_delivery_profile() {
     local source_ref="$1"
     local profile_id="$2"
     local current_assets_repository="$3"
-    local source_repository="${ZHANLU_CODE_REPOSITORY:-${SOURCE_REPOSITORY:-}}" # zhanlu_change - configured per repository
+    local source_repository="${ZHANLU_CODE_REPOSITORY:-${SOURCE_REPOSITORY:-}}"
     local temp_root
     local archive
     local source_root
@@ -52,6 +67,10 @@ resolve_release_delivery_profile() {
         rm -rf "${temp_root}"
         return 1
     fi
+    # freeze the resolver contract without reinterpreting legacy profiles
+    ZHANLU_DELIVERY_SCHEMA_VERSION="$(jq -r '.schemaVersion' <<<"${result}")"
+    ZHANLU_DELIVERY_CONFIG="$(jq -c '.deliveryConfig // null' <<<"${result}")"
+    export ZHANLU_DELIVERY_SCHEMA_VERSION ZHANLU_DELIVERY_CONFIG
     ZHANLU_DELIVERY_PROFILE="$(jq -r '.id' <<<"${result}")"
     ZHANLU_DELIVERY_PROFILE_DIGEST="$(jq -r '.profileDigest' <<<"${result}")"
     if [[ "${profile_id}" == "default" ]]; then
@@ -60,7 +79,13 @@ resolve_release_delivery_profile() {
         ZHANLU_DELIVERY_ASSETS_REPOSITORY="$(jq -r '.assetsRepository' <<<"${result}")"
     fi
     # Resolve expectations from the pinned private source, never from uploaded assets.
-    if ! ZHANLU_DELIVERY_EXPECTED_ASSETS="$(bash "${package_root}/scripts/check-release-status.sh" '__RELEASE_VERSION__' "${current_assets_repository}" --expected-json)"; then
+    local resolved_app_name="${APP_NAME:-}" resolved_app_name_lc="${APP_NAME_LC:-}" resolved_binary_name="${BINARY_NAME:-}"
+    if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION}" == "2" ]]; then
+        resolved_app_name="$(jq -r '.brand.nameShort' <<<"${ZHANLU_DELIVERY_CONFIG}")"
+        resolved_app_name_lc="$(tr '[:upper:]' '[:lower:]' <<<"${resolved_app_name}")"
+        resolved_binary_name="$(jq -r '.identity.applicationName' <<<"${ZHANLU_DELIVERY_CONFIG}")"
+    fi
+    if ! ZHANLU_DELIVERY_EXPECTED_ASSETS="$(APP_NAME="${resolved_app_name}" APP_NAME_LC="${resolved_app_name_lc}" BINARY_NAME="${resolved_binary_name}" bash "${package_root}/scripts/check-release-status.sh" '__RELEASE_VERSION__' "${current_assets_repository}" --expected-json)"; then
         rm -rf "${temp_root}"
         return 1
     fi
@@ -102,6 +127,20 @@ prepare_release_delivery_profile() {
 
 write_release_delivery_metadata() {
     local output="$1"
+    # v2 records offline delivery and the exact confirmed build inputs
+    if [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" ]]; then
+        local workflow_commit="${ZHANLU_DELIVERY_WORKFLOW_COMMIT:-${RELEASE_WORKFLOW_COMMIT:-${GITHUB_SHA:-}}}"
+        [[ "${workflow_commit}" =~ ^[a-f0-9]{40}$ ]] || { echo 'v2 delivery requires an exact workflow commit' >&2; return 1; }
+        jq -n \
+            --arg version "${RELEASE_VERSION:-${VERSION:-}}" --arg tag "${RELEASE_TAG:?missing release tag}" \
+            --arg profile "${ZHANLU_DELIVERY_PROFILE}" --arg ref "${SOURCE_BRANCH:-develop}" \
+            --arg source "${ZHANLU_DELIVERY_SOURCE_COMMIT}" --arg digest "${ZHANLU_DELIVERY_PROFILE_DIGEST}" \
+            --arg repository "${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" --arg workflow "${workflow_commit}" \
+            --argjson options "${ZHANLU_DELIVERY_BUILD_OPTIONS:?missing confirmed build options}" \
+            --argjson expected "${ZHANLU_DELIVERY_EXPECTED_ASSETS:?missing artifact contract}" \
+            '{schemaVersion:2,deliveryMode:"offline",releaseVersion:$version,releaseTag:$tag,deliveryProfile:$profile,sourceRef:$ref,sourceCommit:$source,workflowCommit:$workflow,profileDigest:$digest,assetsRepository:$repository,buildOptions:$options,expectedAssets:($expected|walk(if type=="string" then gsub("__RELEASE_VERSION__";$version) else . end))}' > "${output}"
+        return
+    fi
     jq -n \
         --arg profile "${ZHANLU_DELIVERY_PROFILE:-default}" \
         --arg releaseVersion "${RELEASE_VERSION:-${VERSION:-}}" \
@@ -112,4 +151,18 @@ write_release_delivery_metadata() {
         --argjson expectedAssets "${ZHANLU_DELIVERY_EXPECTED_ASSETS:?missing artifact contract}" \
         '{schemaVersion:1,releaseVersion:$releaseVersion,deliveryProfile:$profile,sourceRef:$sourceRef,sourceCommit:$sourceCommit,profileDigest:$profileDigest,assetsRepository:$assetsRepository,expectedAssets:($expectedAssets | walk(if type == "string" then gsub("__RELEASE_VERSION__";$releaseVersion) else . end))}' \
         > "${output}"
+}
+
+# compare every frozen v2 input before writing to a previously created target
+assert_release_delivery_metadata() {
+    local metadata="$1" expected
+    [[ "${ZHANLU_DELIVERY_SCHEMA_VERSION:-1}" == "2" ]] || return 0
+    expected="$(mktemp)"
+    if ! write_release_delivery_metadata "${expected}" || ! jq -e --slurpfile expected "${expected}" \
+        'del(.artifacts) == $expected[0]' "${metadata}" >/dev/null; then
+        rm -f "${expected}"
+        echo 'Existing target does not match the confirmed delivery inputs' >&2
+        return 1
+    fi
+    rm -f "${expected}"
 }
