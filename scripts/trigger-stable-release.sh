@@ -52,6 +52,7 @@ VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
 REQUEST_ID=""
 OUTPUT_FORMAT="text"
 COMPUTER_USE_REF=""
+COMPANION_VERSION=""
 NPM_TAG="latest"
 PRIVATE_SOURCE_REPOSITORY="${PRIVATE_SOURCE_REPOSITORY:-}"
 COMPANION_REPOSITORY="${COMPANION_REPOSITORY:-}"
@@ -110,6 +111,7 @@ VSCodium Stable 版本手动触发脚本
   --no-npm        禁止全部 npm 写入
   --npm-tag       latest 或 ci1232（测试预发布）
   --computer-use-ref 指定私有 companion 源码 Ref
+  --companion-version 指定 companion 制品版本，留空使用 Release 版本
   --computer-use-commit 固定 companion 的完整 SHA
   --help          显示帮助信息
 
@@ -170,6 +172,8 @@ while [[ $# -gt 0 ]]; do
         # zhanlu_change start - explicit optional companion and joint publication controls
         --publish-npm)
             PUBLISH_NPM=true; shift ;;
+        --companion-version)
+            COMPANION_VERSION="${2:?missing companion version}"; shift 2 ;;
         --npm-tag)
             NPM_TAG="$2"; shift 2 ;;
         --computer-use-ref)
@@ -593,6 +597,9 @@ trigger_workflow() {
                 -f "companion_commit=${COMPUTER_USE_COMMIT}" -f "platform=${PLATFORM}"
                 -f "generate_assets=${GENERATE_ONLY}" -f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
                 -f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}" -f "companion_repository=${COMPANION_REPOSITORY}")
+            if [[ -n "${COMPANION_VERSION}" ]]; then
+                dispatch_fields+=(-f "companion_version=${COMPANION_VERSION}")
+            fi
         fi
         # zhanlu_change end
         print_info "触发工作流: $workflow"
@@ -647,8 +654,9 @@ PY
             npm_payload="$(jq -cn --arg ref "${WORKFLOW_REF}" --arg version "${RELEASE_VERSION}" \
                 --arg kind "${RELEASE_KIND}" --arg source "${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
                 --arg request "${REQUEST_ID}" --arg companion "${COMPUTER_USE_COMMIT}" --arg tag "${NPM_TAG}" \
+                --arg companionVersion "${COMPANION_VERSION}" \
                 --arg privateSource "${PRIVATE_SOURCE_REPOSITORY}" --arg companionRepo "${COMPANION_REPOSITORY}" --argjson runs "${runs_json}" \
-                '{ref:$ref,inputs:{publish_npm:true,release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson),companion_commit:$companion,npm_tag:$tag,private_source_repository:$privateSource,companion_repository:$companionRepo}}')"
+                '{ref:$ref,inputs:{publish_npm:true,release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson),companion_commit:$companion,npm_tag:$tag,private_source_repository:$privateSource,companion_repository:$companionRepo} + (if $companionVersion == "" then {} else {companion_version:$companionVersion} end)}')"
             npm_run_id="" npm_run_url=""
             if npm_response="$(gh api "repos/${REPO}/actions/workflows/publish-package.yml/dispatches" \
                 --method POST -H "Accept: application/vnd.github+json" \
@@ -702,10 +710,23 @@ main() {
         COMPUTER_USE_COMMIT="$(gh api "repos/${COMPANION_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"
     fi
     if [[ -n "${COMPUTER_USE_COMMIT}" && ! "${COMPUTER_USE_COMMIT}" =~ ^[a-f0-9]{40}$ ]]; then print_error "Invalid companion commit"; exit 1; fi
+    if [[ -n "${COMPANION_VERSION}" ]]; then
+        if [[ -z "${COMPUTER_USE_COMMIT}" || "$TRIGGER_MODE" != workflow ||
+            ! "${COMPANION_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-ci1232\.[1-9][0-9]*)?$ ]]; then
+            print_error "Independent companion version requires a pinned companion, --workflow and an exact version"
+            exit 1
+        fi
+        if [[ "${RELEASE_KIND}" == formal && "${COMPANION_VERSION}" == *-* ]]; then
+            print_error "Formal builds require a stable companion version"
+            exit 1
+        fi
+    fi
     if [[ "${PUBLISH_NPM}" == true ]]; then
         [[ -n "${COMPUTER_USE_COMMIT}" && "$PLATFORM" == all && "$GENERATE_ONLY" == false && "$DELIVERY_PROFILE" == default && "$TRIGGER_MODE" == workflow ]] || { print_error "Joint npm requires a pinned companion, all platforms and default Release output"; exit 1; }
         case "${NPM_TAG}:${RELEASE_VERSION}" in
-            ci1232:1.7.0-ci1232.*) ;;
+            ci1232:1.7.0-ci1232.*)
+                [[ "${COMPANION_VERSION:-${RELEASE_VERSION}}" == *-ci1232.* ]] || { print_error "ci1232 requires a companion prerelease version"; exit 1; }
+                ;;
             latest:*) [[ "${RELEASE_KIND}" == formal ]] || { print_error "latest requires a stable formal version"; exit 1; } ;;
             *) print_error "Invalid joint npm tag"; exit 1 ;;
         esac
