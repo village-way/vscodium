@@ -52,6 +52,7 @@ VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
 REQUEST_ID=""
 OUTPUT_FORMAT="text"
 COMPUTER_USE_REF=""
+OFFICE_PLUGIN_VERSION=""
 NPM_TAG="latest"
 PRIVATE_SOURCE_REPOSITORY="${PRIVATE_SOURCE_REPOSITORY:-}"
 COMPANION_REPOSITORY="${COMPANION_REPOSITORY:-}"
@@ -111,6 +112,7 @@ VSCodium Stable 版本手动触发脚本
   --npm-tag       latest 或 ci1232（测试预发布）
   --computer-use-ref 指定私有 companion 源码 Ref
   --computer-use-commit 固定 companion 的完整 SHA
+  --office-plugin-version 指定 Office 插件包版号
   --help          显示帮助信息
 
 示例:
@@ -167,6 +169,8 @@ while [[ $# -gt 0 ]]; do
             PUBLISH_NPM=false; shift ;;
         --computer-use-commit)
             COMPUTER_USE_COMMIT="$2"; shift 2 ;;
+        --office-plugin-version)
+            OFFICE_PLUGIN_VERSION="$2"; shift 2 ;;
         # zhanlu_change start - explicit optional companion and joint publication controls
         --publish-npm)
             PUBLISH_NPM=true; shift ;;
@@ -585,6 +589,9 @@ trigger_workflow() {
     local -a failed_workflows=() # zhanlu_change
     for workflow in "${workflows[@]}"; do
         local -a dispatch_fields=("${wf_fields[@]}")
+        if [[ "$workflow" == "stable-linux.yml" && -n "$OFFICE_PLUGIN_VERSION" ]]; then
+            dispatch_fields+=(-f "office_plugin_version=${OFFICE_PLUGIN_VERSION}")
+        fi
         # zhanlu_change start - companion builds are independent of IDE internals
         if [[ -n "${PRIVATE_SOURCE_REPOSITORY}" ]]; then dispatch_fields+=(-f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}"); fi
         if [[ "$workflow" == "build-companion.yml" ]]; then
@@ -691,6 +698,16 @@ main() {
     echo "========================================"
     echo ""
 
+    if [[ -n "$OFFICE_PLUGIN_VERSION" ]]; then
+        if [[ ! "$OFFICE_PLUGIN_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || "${#OFFICE_PLUGIN_VERSION}" -gt 64 ]]; then
+            print_error "Office plugin version must use X.Y.Z"
+            exit 1
+        fi
+        if [[ "$TRIGGER_MODE" != workflow || "$PLATFORM" != all || "$GENERATE_ONLY" == true || "${RELEASE_DRAFT:-true}" != true ]]; then
+            print_error "Office plugin packaging requires all platforms and a draft Release"
+            exit 1
+        fi
+    fi
     check_gh_cli
     get_repo_info
     resolve_release_version

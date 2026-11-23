@@ -167,6 +167,11 @@ esac
     const formal = run(['--workflow', '--platform', 'all', '--release-kind', 'formal', '--version-time-patch', '7192']);
     assert.equal(formal.calls.length, 3, 'npm defaults off for all installers');
     assert.equal(formal.document.npmRun, undefined);
+    const office = run(['--workflow', '--platform', 'all', '--office-plugin-version', '2.3.4']);
+    assert.deepEqual(office.calls.map(call => call.inputs.office_plugin_version), [undefined, '2.3.4', undefined]);
+    assert.equal(office.calls[1].inputs.release_version, '1.6.4');
+    const incompleteOffice = run(['--workflow', '--platform', 'linux', '--office-plugin-version', '2.3.4'], false);
+    assert.equal(incompleteOffice.calls.length, 0);
     const joint = run(['--workflow', '--platform', 'all', '--publish-npm', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private']);
     assert.equal(joint.calls.length, 5);
     const packageInputs = joint.calls.at(-1).inputs;
