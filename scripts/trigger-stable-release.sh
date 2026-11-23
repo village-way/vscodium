@@ -316,6 +316,25 @@ get_repo_info() {
 }
 
 # zhanlu_change start - workflow_dispatch accepts branch/tag refs, so pin a neutral immutable request tag
+authorize_component_signing_tag() {
+    local tag="$1"
+    local recipe=".github/workflows/build-platform-components.yml"
+    if [[ ! -f "$recipe" ]] || ! grep -Eq '^[[:space:]]*environment:[[:space:]]*office-component-signing[[:space:]]*$' "$recipe"; then
+        return 0
+    fi
+    local branch="${WORKFLOW_REF#refs/heads/}" policies
+    local endpoint="repos/${REPO}/environments/office-component-signing/deployment-branch-policies"
+    local settings_token="${GITHUB_GIT_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
+    policies="$(GH_TOKEN="$settings_token" gh api --paginate "${endpoint}?per_page=100")"
+    if ! jq -es --arg branch "$branch" 'any(.[] | .branch_policies[]?; .type == "branch" and .name == $branch)' <<<"$policies" >/dev/null; then
+        print_error "Workflow branch is not approved for Office component signing: $branch"
+        return 1
+    fi
+    if ! jq -es --arg tag "$tag" 'any(.[] | .branch_policies[]?; .type == "tag" and .name == $tag)' <<<"$policies" >/dev/null; then
+        GH_TOKEN="$settings_token" gh api --method POST "$endpoint" -f "name=$tag" -f "type=tag" >/dev/null
+    fi
+}
+
 pin_workflow_ref() {
     local expected="${RELEASE_WORKFLOW_COMMIT:-}"
     [[ -n "$expected" ]] || return 0
@@ -334,6 +353,7 @@ pin_workflow_ref() {
         print_error "Request tag lookup failed; refusing to mutate references"
         return 1
     fi
+    authorize_component_signing_tag "$tag"
     WORKFLOW_REF="$tag"
 }
 # zhanlu_change end

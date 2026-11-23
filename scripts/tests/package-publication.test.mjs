@@ -139,6 +139,10 @@ case "$*" in
   api\\ repos/example/build/commits/*) printf '%s\\n' "$MOCK_WORKFLOW_SHA" ;;
   api\\ repos/example/build/git/ref/tags/*) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   api\\ --method\\ POST\\ repos/example/build/git/refs*) printf '%s\\n' "$*" >> "$MOCK_TAG_LOG"; echo '{}' ;;
+  api\\ --paginate\\ repos/example/build/environments/office-component-signing/deployment-branch-policies*)
+    printf '{"branch_policies":[{"type":"branch","name":"%s"}]}\\n' "$MOCK_SIGNING_BRANCH" ;;
+  api\\ --method\\ POST\\ repos/example/build/environments/office-component-signing/deployment-branch-policies*)
+    printf '%s\\n' "$*" >> "$MOCK_TAG_LOG"; echo '{}' ;;
   api\\ *dispatches*)
     payload="$(cat)"
     printf '%s\\n' "$payload" >> "$MOCK_DISPATCH_LOG"
@@ -208,5 +212,20 @@ esac
     const all = run(['--dispatch', '--platform', 'linux', '--bundle-codex-runtime', '1']);
     assert.equal(all.calls.length, 3);
     assert.ok(all.calls.every(call => call.inputs.bundle_codex_runtime === '1'));
+
+    const workflows = path.join(root, '.github/workflows');
+    fs.mkdirSync(workflows, { recursive: true });
+    fs.writeFileSync(path.join(workflows, 'build-platform-components.yml'), 'jobs:\n  build:\n    environment: office-component-signing\n');
+    const signed = run(['--workflow', '--platform', 'all'], true, {
+      RELEASE_WORKFLOW_COMMIT: 'b'.repeat(40), MOCK_SIGNING_BRANCH: 'develop',
+    });
+    const signingChanges = fs.readFileSync(path.join(root, 'tags.log'), 'utf8');
+    assert.ok(signed.calls.every(call => call.ref === 'build-request-request-1'));
+    assert.match(signingChanges, /deployment-branch-policies -f name=build-request-request-1 -f type=tag/);
+    const unapproved = run(['--workflow', '--platform', 'all'], false, {
+      RELEASE_WORKFLOW_COMMIT: 'b'.repeat(40), MOCK_SIGNING_BRANCH: 'other',
+    });
+    assert.equal(unapproved.calls.length, 0);
+    assert.doesNotMatch(fs.readFileSync(path.join(root, 'tags.log'), 'utf8'), /deployment-branch-policies/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
