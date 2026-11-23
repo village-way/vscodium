@@ -1,0 +1,127 @@
+name: build-platform-components
+on:
+  workflow_call:
+    outputs:
+      builtin-inputs:
+        description: Whether the pinned source consumes the signed workflow inputs
+        value: ${{ jobs.build.outputs.builtin-inputs }}
+    inputs:
+      platform: {type: string, required: true}
+      source_commit: {type: string, required: true}
+      source_repository: {type: string, required: true}
+      source_subdir: {type: string, required: true}
+      assets_repository: {type: string, required: true}
+      release_version: {type: string, required: true}
+      generate_assets: {type: boolean, required: true}
+    secrets:
+      source_key: {required: false}
+      app_key: {required: false}
+      PLATFORM_COMPONENT_SIGNING_KEY: {required: false}
+      release_token: {required: false}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    environment: office-component-signing
+    outputs:
+      builtin-inputs: ${{ steps.recipe.outputs.builtin-inputs }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: >-
+          ${{ fromJSON('{
+            "macos": [
+              {"target":"darwin-x64","arch":"x64","runner":"macos-15-intel"},
+              {"target":"darwin-arm64","arch":"arm64","runner":"macos-15"}
+            ],
+            "windows": [
+              {"target":"win32-x64","arch":"x64","runner":"windows-2022"},
+              {"target":"win32-arm64","arch":"arm64","runner":"windows-11-arm"}
+            ],
+            "linux": [
+              {"target":"linux-x64","arch":"x64","runner":"ubuntu-24.04"},
+              {"target":"linux-arm64","arch":"arm64","runner":"ubuntu-24.04-arm"}
+            ]
+          }')[inputs.platform] }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.build-entry/checkout-build-inputs
+        id: sources
+        with:
+          source-repository: ${{ inputs.source_repository }}
+          source-ref: ${{ inputs.source_commit }}
+          source-key: ${{ secrets.source_key }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.app_key }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.SOURCE_APP_REPOSITORIES }}
+      - name: Read the pinned component recipe
+        id: recipe
+        shell: bash
+        env:
+          SOURCE_SUBDIR: ${{ inputs.source_subdir }}
+          REQUESTED_SOURCE: ${{ inputs.source_commit }}
+          RESOLVED_SOURCE: ${{ steps.sources.outputs.source-commit }}
+        run: |
+          [[ "$REQUESTED_SOURCE" =~ ^[a-f0-9]{40}$ && "$RESOLVED_SOURCE" == "$REQUESTED_SOURCE" ]]
+          source_directory="build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}"
+          test -d "$source_directory"
+          recipe="$source_directory/scripts/office/build-release-components.py"
+          if [[ -f "$recipe" ]]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+            if grep -Fq 'download-builtins' "$recipe"; then
+              echo 'builtin-inputs=true' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: steps.recipe.outputs.available == 'true'
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.arch }}
+          package-manager-cache: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: steps.recipe.outputs.available == 'true'
+        with:
+          python-version: '3.11'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: steps.recipe.outputs.available == 'true'
+        with:
+          bun-version: '1.3.14'
+          no-cache: true
+      - name: Install native archive tools
+        if: steps.recipe.outputs.available == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+      - name: Build and validate platform components
+        if: steps.recipe.outputs.available == 'true'
+        shell: bash
+        env:
+          SOURCE_SUBDIR: ${{ inputs.source_subdir }}
+          SOURCE_COMMIT: ${{ steps.sources.outputs.source-commit }}
+          COMPONENT_TARGET: ${{ matrix.target }}
+          ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          GENERATE_ASSETS: ${{ inputs.generate_assets }}
+          ZL_OFFICE_COMPONENT_PUBLIC_KEYS: ${{ vars.PLATFORM_COMPONENT_PUBLIC_KEYS }}
+          PLATFORM_COMPONENT_SIGNING_KEY_ID: ${{ vars.PLATFORM_COMPONENT_SIGNING_KEY_ID }}
+          PLATFORM_COMPONENT_SIGNING_KEY: ${{ secrets.PLATFORM_COMPONENT_SIGNING_KEY }}
+          GH_TOKEN: ${{ !inputs.generate_assets && secrets.release_token || '' }}
+        run: |
+          args=(--source build-source --source-commit "$SOURCE_COMMIT" --target "$COMPONENT_TARGET" --output "$RUNNER_TEMP/platform-components/$COMPONENT_TARGET")
+          if [[ "$GENERATE_ASSETS" != true ]]; then args+=(--publish); fi
+          python -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/office/build-release-components.py" "${args[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: steps.recipe.outputs.available == 'true' && inputs.generate_assets
+        with:
+          name: platform-components-${{ matrix.target }}
+          path: ${{ runner.temp }}/platform-components/${{ matrix.target }}/*.zip
+          retention-days: 3
+          if-no-files-found: error
