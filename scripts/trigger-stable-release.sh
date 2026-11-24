@@ -656,7 +656,7 @@ PY
                 --arg request "${REQUEST_ID}" --arg companion "${COMPUTER_USE_COMMIT}" --arg tag "${NPM_TAG}" \
                 --arg companionVersion "${COMPANION_VERSION}" \
                 --arg privateSource "${PRIVATE_SOURCE_REPOSITORY}" --arg companionRepo "${COMPANION_REPOSITORY}" --argjson runs "${runs_json}" \
-                '{ref:$ref,inputs:{publish_npm:true,release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson),companion_commit:$companion,npm_tag:$tag,private_source_repository:$privateSource,companion_repository:$companionRepo} + (if $companionVersion == "" then {} else {companion_version:$companionVersion} end)}')"
+                '{ref:$ref,inputs:({publish_npm:true,release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson),companion_commit:$companion,npm_tag:$tag,private_source_repository:$privateSource,companion_repository:$companionRepo} + (if $companionVersion == "" then {} else {companion_version:$companionVersion} end))}')"
             npm_run_id="" npm_run_url=""
             if npm_response="$(gh api "repos/${REPO}/actions/workflows/publish-package.yml/dispatches" \
                 --method POST -H "Accept: application/vnd.github+json" \
