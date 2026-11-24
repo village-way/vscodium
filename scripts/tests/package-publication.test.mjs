@@ -88,6 +88,10 @@ test('joint publication requires four exact runs and complete companion provenan
     return route.endsWith('/10') ? manifest : { ...metadata, releaseVersion: joint.version };
   };
   await waitForRelease(joint, api);
+  const independent = { ...joint, companionVersion: '0.4.0-ci1232.17' };
+  await waitForRelease(independent, route => route.endsWith('/10') ? { ...manifest, version: independent.companionVersion } : api(route));
+  await assert.rejects(waitForRelease(independent, api), /Companion delivery/);
+  assert.throws(() => validateBatch({ ...independent, companionVersion: '0.4.0' }), /joint npm channel/);
   assert.throws(() => validateBatch({ ...joint, runs: joint.runs.slice(0, 3) }), /all platform/);
   assert.throws(() => validateBatch({ ...joint, tag: 'latest' }), /npm channel/);
   for (const change of [{ complete: false }, { sourceCommit: 'd'.repeat(40) }, { workflowCommit: 'e'.repeat(40) }, { artifacts: [] },
@@ -174,6 +178,7 @@ esac
     assert.equal(packageInputs.release_kind, 'formal');
     assert.equal(packageInputs.source_commit, 'a'.repeat(40));
     assert.equal(packageInputs.companion_commit, 'c'.repeat(40));
+    assert.equal(packageInputs.companion_version, undefined);
     assert.equal(packageInputs.npm_tag, 'latest');
     assert.deepEqual(JSON.parse(packageInputs.platform_runs).map(run => run.runId), [1, 2, 3, 4]);
     assert.equal(joint.document.npmRun.runId, 5);
@@ -185,8 +190,11 @@ esac
     assert.equal(conflict.calls.length, 0);
     const invalidJoint = run(['--workflow', '--platform', 'linux', '--publish-npm'], false);
     assert.equal(invalidJoint.calls.length, 0);
-    const testing = run(['--workflow', '--release-version', '1.7.0-ci1232.20261103120000', '--publish-npm', '--npm-tag', 'ci1232', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private']);
+    const testing = run(['--workflow', '--release-version', '1.7.0-ci1232.20261103120000', '--publish-npm', '--npm-tag', 'ci1232', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private', '--companion-version', '0.4.0-ci1232.17']);
     assert.equal(testing.calls.at(-1).inputs.npm_tag, 'ci1232');
+    assert.deepEqual(testing.calls.map(({ inputs }) => inputs.release_version), Array(5).fill('1.7.0-ci1232.20261103120000'));
+    assert.deepEqual(testing.calls.map(({ inputs }) => inputs.companion_version), [undefined, undefined, undefined, '0.4.0-ci1232.17', '0.4.0-ci1232.17']);
+    assert.equal(run(['--workflow', '--companion-version', '0.4.0'], false).calls.length, 0);
     for (const args of [['--workflow', '--platform', 'linux', '--generate'], ['--workflow', '--platform', 'linux', '--delivery-profile', 'customer']]) {
       const skipped = run(args);
       assert.equal(skipped.calls.length, 1);

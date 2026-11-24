@@ -11,6 +11,15 @@ export function validateBatch(context) {
       (context.tag === 'ci1232' && /^1\.7\.0-ci1232\.[1-9]\d*$/.test(context.version)))) throw new Error('Invalid joint npm channel');
   const joint = Boolean(context.companionCommit);
   if (joint && !/^[a-f0-9]{40}$/.test(context.companionCommit)) throw new Error('Invalid companion identity');
+  if (context.companionVersion) {
+    if (!joint || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-ci1232\.[1-9]\d*)?$/.test(context.companionVersion)) {
+      throw new Error('Invalid companion package version');
+    }
+    if ((context.tag === 'latest' && context.companionVersion.includes('-')) ||
+        (context.tag === 'ci1232' && !context.companionVersion.includes('-ci1232.'))) {
+      throw new Error('Companion version does not match the joint npm channel');
+    }
+  }
   if (!Array.isArray(context.runs) || !context.runs.length || context.runs.length > (joint ? 4 : 3)) throw new Error('Missing selected platform runs');
   if (joint && (context.runs.length !== 4 || ![...workflows].every(name => context.runs.some(run => run.workflow === name)))) throw new Error('Joint publication requires all platform runs');
   if (new Set(context.runs.map(run => run.workflow)).size !== context.runs.length || new Set(context.runs.map(run => run.runId)).size !== context.runs.length) throw new Error('Duplicate platform runs');
@@ -64,7 +73,7 @@ export async function waitForRelease(context, api, { sleep = ms => new Promise(r
     const metadata = unified ? document : await api(`/releases/assets/${companion.id}`, true);
     const expected = ['darwin-universal', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'];
     const artifacts = unified && metadata.artifacts && !Array.isArray(metadata.artifacts) ? metadata.artifacts : undefined;
-    if (metadata.version !== context.version || metadata.sourceCommit !== context.companionCommit || metadata.workflowCommit !== context.workflowCommit || metadata.complete !== true ||
+    if (metadata.version !== (context.companionVersion ?? context.version) || metadata.sourceCommit !== context.companionCommit || metadata.workflowCommit !== context.workflowCommit || metadata.complete !== true ||
         !Array.isArray(metadata.platforms) || metadata.platforms.length !== expected.length || !expected.every(name => metadata.platforms.includes(name)) ||
         (unified ? metadata.schemaVersion !== 1 || !artifacts || Object.keys(artifacts).length !== expected.length || expected.some(name => {
           const item = artifacts[name];
@@ -77,7 +86,7 @@ export async function waitForRelease(context, api, { sleep = ms => new Promise(r
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = process.env;
-  const context = { sourceCommit: env.SOURCE_COMMIT, companionCommit: env.COMPANION_COMMIT, tag: env.NPM_TAG, requestId: env.REQUEST_ID, version: env.RELEASE_VERSION, kind: env.RELEASE_KIND, runs: JSON.parse(env.PLATFORM_RUNS || 'null'), repository: env.GITHUB_REPOSITORY, workflowCommit: env.PLATFORM_WORKFLOW_COMMIT || env.GITHUB_SHA, metadataAsset: env.RELEASE_METADATA_ASSET };
+  const context = { sourceCommit: env.SOURCE_COMMIT, companionCommit: env.COMPANION_COMMIT, companionVersion: env.COMPANION_VERSION || undefined, tag: env.NPM_TAG, requestId: env.REQUEST_ID, version: env.RELEASE_VERSION, kind: env.RELEASE_KIND, runs: JSON.parse(env.PLATFORM_RUNS || 'null'), repository: env.GITHUB_REPOSITORY, workflowCommit: env.PLATFORM_WORKFLOW_COMMIT || env.GITHUB_SHA, metadataAsset: env.RELEASE_METADATA_ASSET };
   if (!context.metadataAsset) throw new Error('Configure RELEASE_METADATA_ASSET before publishing packages');
   const api = async (route, asset = false) => {
     const response = await fetch(`https://api.github.com/repos/${context.repository}${route}`, { headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: asset ? 'application/octet-stream' : 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10' }, signal: AbortSignal.timeout(30_000) });

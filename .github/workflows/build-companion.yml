@@ -9,18 +9,23 @@ on:
       release_kind: {type: choice, options: [auto, formal, development], default: auto}
       source_commit: {type: string, required: true}
       companion_commit: {type: string, required: true}
+      companion_version: {type: string, description: Exact companion package version}
       platform: {type: choice, options: [all, macos, windows, linux], default: all}
       generate_assets: {type: boolean, default: false}
       assets_repository: {type: string, required: true}
       private_source_repository: {type: string}
       companion_repository: {type: string}
 run-name: build-companion · ${{ inputs.release_version }} · ${{ inputs.portal_request_id }}
+concurrency:
+  group: ${{ inputs.release_version && !inputs.generate_assets && format('companion-release-{0}-{1}', inputs.assets_repository, inputs.release_version) || github.run_id }}
+  queue: max
 permissions:
   contents: read
 env:
   SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
   RELEASE_VERSION: ${{ inputs.release_version }}
   COMPANION_COMMIT: ${{ inputs.companion_commit }}
+  COMPANION_VERSION: ${{ inputs.companion_version || inputs.release_version }}
   COMPANION_WINDOWS_PUBLISHER: ${{ vars.COMPANION_WINDOWS_PUBLISHER }}
 jobs:
   validate:
@@ -107,7 +112,7 @@ jobs:
           COMPANION_WINDOWS_P12_PASSWORD: ${{ secrets.COMPANION_WINDOWS_P12_PASSWORD }}
         run: |
           kind="$(node "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/release-kind.mjs" "$RELEASE_VERSION" "$SELECTED_KIND")"
-          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --platform "$SELECTED_TARGET" --kind "$kind" --release-version "$RELEASE_VERSION" --distribution --output native-output
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --platform "$SELECTED_TARGET" --kind "$kind" --release-version "$COMPANION_VERSION" --distribution --output native-output
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: companion-${{ github.run_id }}-${{ matrix.target }}
@@ -122,7 +127,7 @@ jobs:
           SELECTED_TARGET: ${{ matrix.target }}
         shell: bash
         run: |
-          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$COMPANION_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
           python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
   linux:
     needs: plan
@@ -184,7 +189,7 @@ jobs:
           SELECTED_KIND: ${{ inputs.release_kind }}
         run: |
           kind="$(node "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/release-kind.mjs" "$RELEASE_VERSION" "$SELECTED_KIND")"
-          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --platform "$SELECTED_TARGET" --kind "$kind" --release-version "$RELEASE_VERSION" --distribution --output native-output
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --platform "$SELECTED_TARGET" --kind "$kind" --release-version "$COMPANION_VERSION" --distribution --output native-output
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: companion-${{ github.run_id }}-${{ matrix.target }}
@@ -199,7 +204,7 @@ jobs:
           SELECTED_TARGET: ${{ matrix.target }}
         shell: bash
         run: |
-          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$COMPANION_VERSION" --workflow "$GITHUB_SHA" --input native-output --output platform-delivery --platform "$SELECTED_TARGET"
           python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
   windows-arm-smoke:
     needs: [plan, native]
@@ -242,7 +247,7 @@ jobs:
           ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
         shell: bash
         run: |
-          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-input --output platform-delivery --platform windows
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$COMPANION_VERSION" --workflow "$GITHUB_SHA" --input native-input --output platform-delivery --platform windows
           python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$GITHUB_SHA"
   collect:
     needs: [plan, native, linux, windows-arm-smoke]
@@ -283,7 +288,7 @@ jobs:
       - name: Verify selected delivery matrix
         env:
           SELECTED_PLATFORM: ${{ inputs.platform }}
-        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$GITHUB_SHA" --input native-input --output companion-delivery --platform "$SELECTED_PLATFORM"
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$COMPANION_VERSION" --workflow "$GITHUB_SHA" --input native-input --output companion-delivery --platform "$SELECTED_PLATFORM"
       - name: Upload draft assets
         if: '!inputs.generate_assets'
         env:
