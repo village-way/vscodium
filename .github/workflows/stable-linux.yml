@@ -1081,7 +1081,9 @@ jobs:
 
   office_plugin:
     needs: [check, build, platform_components]
-    if: inputs.office_plugin_version != '' && !inputs.generate_assets
+    if: >- # zhanlu_change - require direct prerequisites even when the optional Bridge job was skipped
+      !cancelled() && needs.check.result == 'success' && needs.build.result == 'success' &&
+      needs.platform_components.result == 'success' && inputs.office_plugin_version != '' && !inputs.generate_assets
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
