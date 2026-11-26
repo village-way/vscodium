@@ -1,0 +1,32 @@
+name: Restore signed platform inputs
+description: Restore the signed inputs for the desktop target from this build
+inputs:
+  target:
+    description: Platform and architecture of the desktop package
+    required: true
+  generate-assets:
+    description: Restore workflow artifacts instead of draft Release assets
+    required: true
+  token:
+    description: Credential with access to the draft Release
+    required: false
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      if: inputs.generate-assets == 'true'
+      with:
+        name: platform-components-${{ inputs.target }}
+        path: ${{ runner.temp }}/platform-components/${{ inputs.target }}
+    - shell: bash
+      env:
+        GENERATE_ASSETS: ${{ inputs.generate-assets }}
+        PLATFORM_COMPONENT_TARGET: ${{ inputs.target }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        component_inputs="$RUNNER_TEMP/platform-components/$PLATFORM_COMPONENT_TARGET"
+        if [[ "$GENERATE_ASSETS" != true ]]; then
+          python3 -B scripts/office/build-release-components.py download-builtins \
+            "$PLATFORM_COMPONENT_TARGET" "$RELEASE_VERSION" "$component_inputs"
+        fi
+        printf 'ZL_OFFICE_COMPONENTS_ZIP_DIR=%s\n' "$component_inputs" >> "$GITHUB_ENV"

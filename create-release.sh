@@ -227,16 +227,16 @@ else
 fi
 
 # zhanlu_change start - pinned builds may recover drafts but never rewrite published or unrelated releases
-if [[ -n "${RELEASE_WORKFLOW_COMMIT:-}" && "$UPDATE_EXISTING" == true ]]; then
+if [[ "$UPDATE_EXISTING" == true && ( -n "${RELEASE_WORKFLOW_COMMIT:-}" || -n "${ZL_OFFICE_COMPONENT_VERSION:-}" ) ]]; then
     [[ "$(gh release view "$VERSION" --repo "$ASSETS_REPOSITORY" --json isDraft --jq .isDraft)" == true ]] || { echo 'Published releases cannot be rebuilt; choose a new version' >&2; exit 1; }
     existing_assets="$(gh release view "$VERSION" --repo "$ASSETS_REPOSITORY" --json assets --jq '.assets | map(.name)')"
     if jq -e 'index("zhanlu-delivery.json") != null' <<<"$existing_assets" >/dev/null; then
         metadata_dir="$(mktemp -d)"
         if ! gh release download "$VERSION" --repo "$ASSETS_REPOSITORY" --pattern zhanlu-delivery.json --dir "$metadata_dir" >/dev/null 2>&1 || \
-            ! jq -e --arg version "$VERSION" --arg source "$ZHANLU_DELIVERY_SOURCE_COMMIT" --arg profile "$ZHANLU_DELIVERY_PROFILE" --arg digest "$ZHANLU_DELIVERY_PROFILE_DIGEST" --arg repository "$ASSETS_REPOSITORY" \
-                '.releaseVersion == $version and .sourceCommit == $source and .deliveryProfile == $profile and .profileDigest == $digest and .assetsRepository == $repository' "$metadata_dir/zhanlu-delivery.json" >/dev/null; then
+            ! jq -e --arg version "$VERSION" --arg source "$ZHANLU_DELIVERY_SOURCE_COMMIT" --arg profile "$ZHANLU_DELIVERY_PROFILE" --arg digest "$ZHANLU_DELIVERY_PROFILE_DIGEST" --arg repository "$ASSETS_REPOSITORY" --arg officeVersion "${ZL_OFFICE_COMPONENT_VERSION:-}" \
+                '.releaseVersion == $version and .sourceCommit == $source and .deliveryProfile == $profile and .profileDigest == $digest and .assetsRepository == $repository and (.officeComponentVersion // "") == $officeVersion' "$metadata_dir/zhanlu-delivery.json" >/dev/null; then
             rm -rf "$metadata_dir"
-            echo 'Existing draft belongs to another source/profile, or its metadata could not be verified' >&2
+            echo 'Existing draft belongs to another source, profile or Office version, or its metadata could not be verified' >&2
             exit 1
         fi
         rm -rf "$metadata_dir"

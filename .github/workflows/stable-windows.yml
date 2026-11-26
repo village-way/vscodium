@@ -53,6 +53,9 @@ on:
       release_version:
         type: string
         description: Release/tag version to publish (optional)
+      office_component_version:
+        type: string
+        description: Exact Office component version (optional)
       version_time_patch:
         type: string
         description: Internal 4-digit VS Code compatibility patch (optional)
@@ -63,6 +66,7 @@ run-name: stable-windows · ${{ inputs.release_version || github.event.client_pa
 
 env:
   ZL_OFFICE_COMPONENT_PUBLIC_KEYS: ${{ vars.PLATFORM_COMPONENT_PUBLIC_KEYS }}
+  ZL_OFFICE_COMPONENT_VERSION: ${{ inputs.office_component_version }}
   GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }} # zhanlu_change - wrapper checkout follows the triggering ref
   APP_NAME: Zhanlu
   APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
@@ -164,6 +168,8 @@ jobs:
   compile:
     needs:
       - check
+      - platform_components
+    if: ${{ !cancelled() && needs.check.result == 'success' && (needs.platform_components.result == 'success' || needs.platform_components.result == 'skipped') }}
     runs-on: windows-2022
     defaults:
       run:
@@ -177,6 +183,7 @@ jobs:
       VSCODE_ARCH: 'x64'
     outputs:
       BUILD_SOURCEVERSION: ${{ env.BUILD_SOURCEVERSION }}
+      builtin_inputs: ${{ needs.platform_components.outputs.builtin_inputs }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -255,6 +262,14 @@ jobs:
           ZHANLU_ROOT_DOTENV: ${{ secrets.ZHANLU_ROOT_DOTENV }}
         run: ./write_zhanlu_root_env.sh
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
+
+      - name: Restore signed platform inputs
+        if: needs.platform_components.outputs.builtin_inputs == 'true' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+        uses: ./.build-entry/restore-platform-inputs
+        with:
+          target: win32-x64
+          generate-assets: ${{ inputs.generate_assets && 'true' || 'false' }}
+          token: ${{ !inputs.generate_assets && secrets.STRONGER_GITHUB_TOKEN || '' }}
 
       - name: Build native Agent resources
         env:
@@ -443,6 +458,14 @@ jobs:
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
       # zhanlu_change start - the restored compile artifact already holds the arch-independent bundles
+      - name: Restore signed platform inputs
+        if: needs.compile.outputs.builtin_inputs == 'true' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+        uses: ./.build-entry/restore-platform-inputs
+        with:
+          target: win32-${{ matrix.vscode_arch }}
+          generate-assets: ${{ inputs.generate_assets && 'true' || 'false' }}
+          token: ${{ !inputs.generate_assets && secrets.STRONGER_GITHUB_TOKEN || '' }}
+
       - name: Refresh Agent resources for the target architecture
         env:
           ZHANLU_AGENT_RESOURCES_PREBUILT: 'yes'
@@ -591,8 +614,8 @@ jobs:
 
 
   platform_components:
-    needs: [check, build]
-    if: needs.check.outputs.SHOULD_DEPLOY == 'yes' || inputs.generate_assets
+    needs: check
+    if: inputs.office_component_version != '' || needs.check.outputs.SHOULD_DEPLOY == 'yes' || inputs.generate_assets
     uses: ./.github/workflows/build-platform-components.yml
     with:
       platform: windows
@@ -601,9 +624,9 @@ jobs:
       source_subdir: ${{ vars.SOURCE_SUBDIR || '' }}
       assets_repository: ${{ inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }}
       release_version: ${{ needs.check.outputs.RELEASE_VERSION }}
+      office_component_version: ${{ inputs.office_component_version }}
       generate_assets: ${{ inputs.generate_assets || false }}
     secrets:
       source_key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
       app_key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
-      signing_key: ${{ secrets.PLATFORM_COMPONENT_SIGNING_KEY }}
       release_token: ${{ secrets.STRONGER_GITHUB_TOKEN }}

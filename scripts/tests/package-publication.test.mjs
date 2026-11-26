@@ -171,6 +171,17 @@ esac
     const formal = run(['--workflow', '--platform', 'all', '--release-kind', 'formal', '--version-time-patch', '7192']);
     assert.equal(formal.calls.length, 3, 'npm defaults off for all installers');
     assert.equal(formal.document.npmRun, undefined);
+    assert.ok(formal.calls.every(({ inputs }) => !("office_component_version" in inputs)));
+    const office = run(['--workflow', '--office-component-version', '1.0.1', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private', '--companion-version', '1.0.2']);
+    assert.deepEqual(office.calls.map(({ inputs }) => inputs.office_component_version), ['1.0.1', '1.0.1', '1.0.1', undefined]);
+    assert.deepEqual(office.calls.map(({ inputs }) => inputs.assemble_office_plugin), [undefined, true, undefined, undefined]);
+    assert.equal(office.calls.at(-1).inputs.companion_version, '1.0.2');
+    for (const args of [['--workflow', '--generate'], ['--workflow', '--platform', 'linux']]) {
+      const partial = run([...args, '--office-component-version', '1.0.1']);
+      assert.ok(partial.calls.every(({ inputs }) => inputs.office_component_version === '1.0.1' && !inputs.assemble_office_plugin));
+    }
+    assert.equal(run(['--workflow', '--office-component-version', '1.00.1'], false).calls.length, 0);
+    assert.equal(run(['--workflow', '--office-component-version', '1.0.1'], false, { RELEASE_DRAFT: 'false' }).calls.length, 0);
     const joint = run(['--workflow', '--platform', 'all', '--publish-npm', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private']);
     assert.equal(joint.calls.length, 5);
     const packageInputs = joint.calls.at(-1).inputs;

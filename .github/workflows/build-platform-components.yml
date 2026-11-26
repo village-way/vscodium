@@ -1,6 +1,10 @@
 name: build-platform-components
 on:
   workflow_call:
+    outputs:
+      builtin_inputs:
+        description: Whether the pinned source accepts signed platform inputs
+        value: ${{ jobs.build.outputs.builtin_inputs }}
     inputs:
       platform: {type: string, required: true}
       source_commit: {type: string, required: true}
@@ -8,11 +12,12 @@ on:
       source_subdir: {type: string, required: true}
       assets_repository: {type: string, required: true}
       release_version: {type: string, required: true}
+      office_component_version: {type: string, required: false}
       generate_assets: {type: boolean, required: true}
     secrets:
       source_key: {required: false}
       app_key: {required: false}
-      signing_key: {required: false}
+      PLATFORM_COMPONENT_SIGNING_KEY: {required: false}
       release_token: {required: false}
 
 permissions:
@@ -20,6 +25,9 @@ permissions:
 
 jobs:
   build:
+    environment: office-component-signing
+    outputs:
+      builtin_inputs: ${{ steps.recipe.outputs.builtin_inputs }}
     strategy:
       fail-fast: false
       matrix:
@@ -62,12 +70,21 @@ jobs:
           SOURCE_SUBDIR: ${{ inputs.source_subdir }}
           REQUESTED_SOURCE: ${{ inputs.source_commit }}
           RESOLVED_SOURCE: ${{ steps.sources.outputs.source-commit }}
+          OFFICE_COMPONENT_VERSION: ${{ inputs.office_component_version }}
         run: |
           [[ "$REQUESTED_SOURCE" =~ ^[a-f0-9]{40}$ && "$RESOLVED_SOURCE" == "$REQUESTED_SOURCE" ]]
           source_directory="build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}"
           test -d "$source_directory"
-          if [[ -f "$source_directory/scripts/office/build-release-components.py" ]]; then
+          recipe="$source_directory/scripts/office/build-release-components.py"
+          if [[ -n "$OFFICE_COMPONENT_VERSION" ]] && ! grep -Fq ZL_OFFICE_COMPONENT_VERSION "$recipe"; then
+            echo 'The pinned source does not support an independent Office component version' >&2
+            exit 1
+          fi
+          if [[ -f "$recipe" ]]; then
             echo 'available=true' >> "$GITHUB_OUTPUT"
+            if grep -Fq download-builtins "$recipe"; then
+              echo 'builtin_inputs=true' >> "$GITHUB_OUTPUT"
+            fi
           fi
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         if: steps.recipe.outputs.available == 'true'
@@ -98,10 +115,11 @@ jobs:
           COMPONENT_TARGET: ${{ matrix.target }}
           ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
           RELEASE_VERSION: ${{ inputs.release_version }}
+          ZL_OFFICE_COMPONENT_VERSION: ${{ inputs.office_component_version }}
           GENERATE_ASSETS: ${{ inputs.generate_assets }}
           ZL_OFFICE_COMPONENT_PUBLIC_KEYS: ${{ vars.PLATFORM_COMPONENT_PUBLIC_KEYS }}
           PLATFORM_COMPONENT_SIGNING_KEY_ID: ${{ vars.PLATFORM_COMPONENT_SIGNING_KEY_ID }}
-          PLATFORM_COMPONENT_SIGNING_KEY: ${{ secrets.signing_key }}
+          PLATFORM_COMPONENT_SIGNING_KEY: ${{ secrets.PLATFORM_COMPONENT_SIGNING_KEY }}
           GH_TOKEN: ${{ !inputs.generate_assets && secrets.release_token || '' }}
         run: |
           args=(--source build-source --source-commit "$SOURCE_COMMIT" --target "$COMPONENT_TARGET" --output "$RUNNER_TEMP/platform-components/$COMPONENT_TARGET")
@@ -114,3 +132,4 @@ jobs:
           path: ${{ runner.temp }}/platform-components/${{ matrix.target }}/*.zip
           retention-days: 3
           if-no-files-found: error
+          overwrite: true

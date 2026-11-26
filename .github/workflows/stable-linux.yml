@@ -53,6 +53,12 @@ on:
       release_version:
         type: string
         description: Release/tag version to publish (optional)
+      office_component_version:
+        type: string
+        description: Exact Office component version (optional)
+      assemble_office_plugin:
+        type: boolean
+        description: Assemble a plugin from all six signed component targets
       version_time_patch:
         type: string
         description: Internal 4-digit VS Code compatibility patch (optional)
@@ -63,6 +69,7 @@ run-name: stable-linux · ${{ inputs.release_version || github.event.client_payl
 
 env:
   ZL_OFFICE_COMPONENT_PUBLIC_KEYS: ${{ vars.PLATFORM_COMPONENT_PUBLIC_KEYS }}
+  ZL_OFFICE_COMPONENT_VERSION: ${{ inputs.office_component_version }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }} # zhanlu_change - wrapper checkout follows the triggering ref
   APP_NAME: Zhanlu
@@ -255,7 +262,8 @@ jobs:
     needs:
       - check
       - prepare_responses_bridge
-    if: always() && needs.check.result == 'success' && (needs.prepare_responses_bridge.result == 'success' || needs.prepare_responses_bridge.result == 'skipped') # zhanlu_change - optional Bridge job may be skipped
+      - platform_components
+    if: ${{ !cancelled() && needs.check.result == 'success' && (needs.prepare_responses_bridge.result == 'success' || needs.prepare_responses_bridge.result == 'skipped') && (needs.platform_components.result == 'success' || needs.platform_components.result == 'skipped') }}
     runs-on: ubuntu-22.04
     env:
       MS_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
@@ -267,6 +275,7 @@ jobs:
       VSCODE_ARCH: 'x64'
     outputs:
       BUILD_SOURCEVERSION: ${{ env.BUILD_SOURCEVERSION }}
+      builtin_inputs: ${{ needs.platform_components.outputs.builtin_inputs }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -363,6 +372,14 @@ jobs:
           echo "ZHANLU_RESPONSES_BRIDGE_BIN_ROOT=$GITHUB_WORKSPACE/zhanlu-responses-bridge" >> "$GITHUB_ENV"
         if: env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
+
+      - name: Restore signed platform inputs
+        if: needs.platform_components.outputs.builtin_inputs == 'true' && env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+        uses: ./.build-entry/restore-platform-inputs
+        with:
+          target: linux-x64
+          generate-assets: ${{ inputs.generate_assets && 'true' || 'false' }}
+          token: ${{ !inputs.generate_assets && secrets.STRONGER_GITHUB_TOKEN || '' }}
 
       - name: Build native Agent resources
         env:
@@ -570,6 +587,14 @@ jobs:
           echo "ZHANLU_RESPONSES_BRIDGE_BIN_ROOT=$GITHUB_WORKSPACE/zhanlu-responses-bridge" >> "$GITHUB_ENV"
         if: env.DISABLED != 'yes' && env.ZHANLU_BUNDLE_CODEX_RUNTIME == '1' && matrix.runtime_target != '' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
       # zhanlu_change end
+
+      - name: Restore signed platform inputs
+        if: needs.compile.outputs.builtin_inputs == 'true' && env.DISABLED != 'yes' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
+        uses: ./.build-entry/restore-platform-inputs
+        with:
+          target: linux-${{ matrix.vscode_arch }}
+          generate-assets: ${{ inputs.generate_assets && 'true' || 'false' }}
+          token: ${{ !inputs.generate_assets && secrets.STRONGER_GITHUB_TOKEN || '' }}
 
       - name: Refresh Agent resources for the target architecture
         env:
@@ -1040,8 +1065,8 @@ jobs:
 
 
   platform_components:
-    needs: [check, build]
-    if: needs.check.outputs.SHOULD_DEPLOY == 'yes' || inputs.generate_assets
+    needs: check
+    if: inputs.office_component_version != '' || needs.check.outputs.SHOULD_DEPLOY == 'yes' || inputs.generate_assets
     uses: ./.github/workflows/build-platform-components.yml
     with:
       platform: linux
@@ -1050,9 +1075,41 @@ jobs:
       source_subdir: ${{ vars.SOURCE_SUBDIR || '' }}
       assets_repository: ${{ inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }}
       release_version: ${{ needs.check.outputs.RELEASE_VERSION }}
+      office_component_version: ${{ inputs.office_component_version }}
       generate_assets: ${{ inputs.generate_assets || false }}
     secrets:
       source_key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
       app_key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
-      signing_key: ${{ secrets.PLATFORM_COMPONENT_SIGNING_KEY }}
       release_token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
+
+  office_plugin:
+    needs: [check, build, platform_components]
+    if: ${{ !cancelled() && !failure() && needs.platform_components.result == 'success' && inputs.assemble_office_plugin && !inputs.generate_assets }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.build-entry/checkout-build-inputs
+        with:
+          source-repository: ${{ inputs.private_source_repository || vars.SOURCE_REPOSITORY }}
+          source-ref: ${{ needs.check.outputs.MS_COMMIT }}
+          source-key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
+          app-client-id: ${{ vars.SOURCE_APP_CLIENT_ID }}
+          app-key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+          app-owner: ${{ github.repository_owner }}
+          app-repositories: ${{ vars.SOURCE_APP_REPOSITORIES }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.3.14'
+          no-cache: true
+      - name: Assemble and verify the Office plugin
+        env:
+          GH_TOKEN: ${{ secrets.STRONGER_GITHUB_TOKEN }}
+          SOURCE_COMMIT: ${{ needs.check.outputs.MS_COMMIT }}
+          RELEASE_VERSION: ${{ needs.check.outputs.RELEASE_VERSION }}
+        run: |
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/office/build-release-components.py" \
+            assemble-office-plugin build-source
