@@ -1080,6 +1080,7 @@ jobs:
     secrets:
       source_key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
       app_key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
+      PLATFORM_COMPONENT_SIGNING_KEY: ${{ secrets.PLATFORM_COMPONENT_SIGNING_KEY }}
       release_token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
 
   office_plugin:
