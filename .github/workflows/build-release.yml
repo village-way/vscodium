@@ -8,6 +8,7 @@ on:
       source_ref: {type: string, required: true, default: develop, description: Primary source branch or commit}
       build_companion: {type: boolean, default: false, description: Build optional native companion packages}
       companion_ref: {type: string, default: develop, description: Independent optional source branch or commit}
+      companion_version: {type: string, description: Exact companion package version}
       publish_npm: {type: boolean, default: false, description: Publish both products together}
       publication_mode: {type: choice, options: [production, test], default: production, description: Production uses latest; test requires ci1232 prerelease}
       platform: {type: choice, options: [all, macos, windows, linux], default: all}
@@ -79,6 +80,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.REPO_TOKEN || secrets.GITHUB_TOKEN }}
           SELECTED_VERSION: ${{ inputs.release_version }}
+          SELECTED_COMPANION_VERSION: ${{ inputs.companion_version }}
           SELECTED_SOURCE_REF: ${{ inputs.source_ref }}
           SELECTED_PLATFORM: ${{ inputs.platform }}
           SELECTED_PROFILE: ${{ inputs.delivery_profile }}
@@ -90,6 +92,7 @@ jobs:
         run: |
           args=(--entry "$GITHUB_WORKSPACE" --source build-source --source-ref "$SELECTED_SOURCE_REF" --version "$SELECTED_VERSION" --platform "$SELECTED_PLATFORM" --profile "$SELECTED_PROFILE" --publication-mode "$SELECTED_MODE" --output release-request.json)
           if [[ "$BUILD_COMPANION" == true ]]; then args+=(--companion companion-source); fi
+          if [[ -n "$SELECTED_COMPANION_VERSION" ]]; then args+=(--companion-version "$SELECTED_COMPANION_VERSION"); fi
           if [[ "$PUBLISH_NPM" == true ]]; then args+=(--publish-npm); fi
           if [[ "$GENERATE_ASSETS" == true ]]; then args+=(--generate); fi
           python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/release-entry.py" "${args[@]}"

@@ -7,18 +7,23 @@ on:
       release_version: {type: string, required: true}
       source_commit: {type: string, required: true, description: Pinned private tooling commit}
       companion_commit: {type: string, required: true}
+      companion_version: {type: string, description: Exact companion package version}
       artifact_run_id: {type: string, required: true}
       artifact_workflow_commit: {type: string, required: true}
       assets_repository: {type: string, required: true}
       private_source_repository: {type: string}
       companion_repository: {type: string}
 run-name: publish-companion-assets · ${{ inputs.release_version }} · ${{ inputs.artifact_run_id }}
+concurrency:
+  group: ${{ inputs.release_version && format('companion-release-{0}-{1}', inputs.assets_repository, inputs.release_version) || github.run_id }}
+  queue: max
 permissions:
   contents: read
 env:
   SOURCE_SUBDIR: ${{ vars.SOURCE_SUBDIR || '' }}
   RELEASE_VERSION: ${{ inputs.release_version }}
   COMPANION_COMMIT: ${{ inputs.companion_commit }}
+  COMPANION_VERSION: ${{ inputs.companion_version || inputs.release_version }}
   COMPANION_WINDOWS_PUBLISHER: ${{ vars.COMPANION_WINDOWS_PUBLISHER }}
   ORIGINAL_WORKFLOW_COMMIT: ${{ inputs.artifact_workflow_commit }}
 jobs:
@@ -89,5 +94,5 @@ jobs:
           ASSETS_REPOSITORY: ${{ inputs.assets_repository }}
           SELECTED_TARGET: ${{ matrix.target }}
         run: |
-          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$ORIGINAL_WORKFLOW_COMMIT" --input native-input --output platform-delivery --platform "$SELECTED_TARGET"
+          python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$COMPANION_VERSION" --workflow "$ORIGINAL_WORKFLOW_COMMIT" --input native-input --output platform-delivery --platform "$SELECTED_TARGET"
           python3 -B "build-source${SOURCE_SUBDIR:+/$SOURCE_SUBDIR}/scripts/build-companion.py" --publish platform-delivery --incremental --workflow "$ORIGINAL_WORKFLOW_COMMIT"

@@ -53,6 +53,9 @@ on:
       release_version:
         type: string
         description: Release/tag version to publish (optional)
+      office_component_version:
+        type: string
+        description: Exact Office component version (optional)
       version_time_patch:
         type: string
         description: Internal 4-digit VS Code compatibility patch (optional)
@@ -63,6 +66,7 @@ run-name: stable-macos · ${{ inputs.release_version || github.event.client_payl
 
 env:
   ZL_OFFICE_COMPONENT_PUBLIC_KEYS: ${{ vars.PLATFORM_COMPONENT_PUBLIC_KEYS }}
+  ZL_OFFICE_COMPONENT_VERSION: ${{ inputs.office_component_version }}
   GITHUB_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }} # zhanlu_change - wrapper checkout follows the triggering ref
   APP_NAME: Zhanlu
   APP_IDENTIFIER: Ecloud.Zhanlu # zhanlu_change - fixed package-manager identity
@@ -94,10 +98,6 @@ jobs:
     needs: platform_components
     if: ${{ !cancelled() && (needs.platform_components.result == 'success' || needs.platform_components.result == 'skipped') }}
     runs-on: ${{ matrix.runner }}
-    outputs:
-      MS_COMMIT: ${{ env.MS_COMMIT }}
-      RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
-      SHOULD_DEPLOY: ${{ env.SHOULD_DEPLOY }}
     env:
       VSCODE_ARCH: ${{ matrix.vscode_arch }}
     strategy:
@@ -176,11 +176,12 @@ jobs:
         if: env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch'
 
       - name: Restore signed platform inputs
-        if: needs.platform_components.outputs.builtin-inputs == 'true' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch') && !inputs.generate_assets
+        if: needs.platform_components.outputs.builtin_inputs == 'true' && (env.SHOULD_BUILD == 'yes' || github.event_name == 'repository_dispatch')
         uses: ./.build-entry/restore-platform-inputs
         with:
           target: darwin-${{ matrix.vscode_arch }}
-          token: ${{ secrets.STRONGER_GITHUB_TOKEN }}
+          generate-assets: ${{ inputs.generate_assets && 'true' || 'false' }}
+          token: ${{ !inputs.generate_assets && secrets.STRONGER_GITHUB_TOKEN || '' }}
 
       - name: Build native Agent resources
         env:
@@ -261,7 +262,7 @@ jobs:
 
 
   platform_components:
-    if: (inputs.source_commit || github.event.client_payload.source_commit) != '' && (inputs.release_version || github.event.client_payload.release_version) != ''
+    if: inputs.office_component_version != '' || ((inputs.source_commit || github.event.client_payload.source_commit) != '' && (inputs.release_version || github.event.client_payload.release_version) != '')
     uses: ./.github/workflows/build-platform-components.yml
     with:
       platform: macos
@@ -270,9 +271,9 @@ jobs:
       source_subdir: ${{ vars.SOURCE_SUBDIR || '' }}
       assets_repository: ${{ inputs.assets_repository || github.event.client_payload.assets_repository || github.repository }}
       release_version: ${{ inputs.release_version || github.event.client_payload.release_version }}
+      office_component_version: ${{ inputs.office_component_version }}
       generate_assets: ${{ inputs.generate_assets || false }}
     secrets:
       source_key: ${{ inputs.private_source_repository != '' && secrets.PRIVATE_SOURCE_DEPLOY_KEY || '' }}
       app_key: ${{ secrets.SOURCE_APP_PRIVATE_KEY }}
-      PLATFORM_COMPONENT_SIGNING_KEY: ${{ secrets.PLATFORM_COMPONENT_SIGNING_KEY }}
       release_token: ${{ secrets.STRONGER_GITHUB_TOKEN }}

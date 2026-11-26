@@ -5,6 +5,7 @@ on:
     inputs:
       publish_npm: {type: boolean, default: false, description: Explicit joint publication opt-in}
       companion_commit: {type: string, required: true}
+      companion_version: {type: string, description: Exact companion package version}
       companion_repository: {type: string}
       private_source_repository: {type: string}
       npm_tag: {type: choice, options: [latest, ci1232], default: latest}
@@ -40,6 +41,7 @@ env:
   RELEASE_KIND: ${{ inputs.release_kind || 'auto' }}
   SOURCE_COMMIT: ${{ inputs.source_commit }}
   COMPANION_COMMIT: ${{ inputs.companion_commit }}
+  COMPANION_VERSION: ${{ inputs.companion_version }}
   NPM_TAG: ${{ inputs.npm_tag }}
   REQUEST_ID: ${{ inputs.request_id }}
   PLATFORM_RUNS: ${{ inputs.platform_runs }}
@@ -153,7 +155,7 @@ jobs:
         env:
           COMPANION_MACOS_TEAM_ID: ${{ secrets.CERTIFICATE_OSX_TEAM_ID }}
           COMPANION_WINDOWS_PUBLISHER: ${{ vars.COMPANION_WINDOWS_PUBLISHER }}
-        run: python3 -B "build-source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "$RELEASE_VERSION" --workflow "$PLATFORM_WORKFLOW_COMMIT" --input native-input --output verified-native --npm-output companion-npm
+        run: python3 -B "build-source${SOURCE_SUBDIR:+/${SOURCE_SUBDIR}}/scripts/collect-companion.py" --source companion-source --commit "$COMPANION_COMMIT" --version "${COMPANION_VERSION:-$RELEASE_VERSION}" --workflow "$PLATFORM_WORKFLOW_COMMIT" --input native-input --output verified-native --npm-output companion-npm
       - name: Prepare verified publication
         id: prepare
         env:

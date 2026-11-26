@@ -88,6 +88,10 @@ test('joint publication requires four exact runs and complete companion provenan
     return route.endsWith('/10') ? manifest : { ...metadata, releaseVersion: joint.version };
   };
   await waitForRelease(joint, api);
+  const independent = { ...joint, companionVersion: '0.4.0-ci1232.17' };
+  await waitForRelease(independent, route => route.endsWith('/10') ? { ...manifest, version: independent.companionVersion } : api(route));
+  await assert.rejects(waitForRelease(independent, api), /Companion delivery/);
+  assert.throws(() => validateBatch({ ...independent, companionVersion: '0.4.0' }), /joint npm channel/);
   assert.throws(() => validateBatch({ ...joint, runs: joint.runs.slice(0, 3) }), /all platform/);
   assert.throws(() => validateBatch({ ...joint, tag: 'latest' }), /npm channel/);
   for (const change of [{ complete: false }, { sourceCommit: 'd'.repeat(40) }, { workflowCommit: 'e'.repeat(40) }, { artifacts: [] },
@@ -139,10 +143,6 @@ case "$*" in
   api\\ repos/example/build/commits/*) printf '%s\\n' "$MOCK_WORKFLOW_SHA" ;;
   api\\ repos/example/build/git/ref/tags/*) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   api\\ --method\\ POST\\ repos/example/build/git/refs*) printf '%s\\n' "$*" >> "$MOCK_TAG_LOG"; echo '{}' ;;
-  api\\ --paginate\\ repos/example/build/environments/office-component-signing/deployment-branch-policies*)
-    printf '{"branch_policies":[{"type":"branch","name":"%s"}]}\\n' "$MOCK_SIGNING_BRANCH" ;;
-  api\\ --method\\ POST\\ repos/example/build/environments/office-component-signing/deployment-branch-policies*)
-    printf '%s\\n' "$*" >> "$MOCK_TAG_LOG"; echo '{}' ;;
   api\\ *dispatches*)
     payload="$(cat)"
     printf '%s\\n' "$payload" >> "$MOCK_DISPATCH_LOG"
@@ -171,11 +171,17 @@ esac
     const formal = run(['--workflow', '--platform', 'all', '--release-kind', 'formal', '--version-time-patch', '7192']);
     assert.equal(formal.calls.length, 3, 'npm defaults off for all installers');
     assert.equal(formal.document.npmRun, undefined);
-    const office = run(['--workflow', '--platform', 'all', '--office-plugin-version', '2.3.4']);
-    assert.deepEqual(office.calls.map(call => call.inputs.office_plugin_version), [undefined, '2.3.4', undefined]);
-    assert.equal(office.calls[1].inputs.release_version, '1.6.4');
-    const incompleteOffice = run(['--workflow', '--platform', 'linux', '--office-plugin-version', '2.3.4'], false);
-    assert.equal(incompleteOffice.calls.length, 0);
+    assert.ok(formal.calls.every(({ inputs }) => !("office_component_version" in inputs)));
+    const office = run(['--workflow', '--office-component-version', '1.0.1', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private', '--companion-version', '1.0.2']);
+    assert.deepEqual(office.calls.map(({ inputs }) => inputs.office_component_version), ['1.0.1', '1.0.1', '1.0.1', undefined]);
+    assert.deepEqual(office.calls.map(({ inputs }) => inputs.assemble_office_plugin), [undefined, true, undefined, undefined]);
+    assert.equal(office.calls.at(-1).inputs.companion_version, '1.0.2');
+    for (const args of [['--workflow', '--generate'], ['--workflow', '--platform', 'linux']]) {
+      const partial = run([...args, '--office-component-version', '1.0.1']);
+      assert.ok(partial.calls.every(({ inputs }) => inputs.office_component_version === '1.0.1' && !inputs.assemble_office_plugin));
+    }
+    assert.equal(run(['--workflow', '--office-component-version', '1.00.1'], false).calls.length, 0);
+    assert.equal(run(['--workflow', '--office-component-version', '1.0.1'], false, { RELEASE_DRAFT: 'false' }).calls.length, 0);
     const joint = run(['--workflow', '--platform', 'all', '--publish-npm', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private']);
     assert.equal(joint.calls.length, 5);
     const packageInputs = joint.calls.at(-1).inputs;
@@ -183,6 +189,7 @@ esac
     assert.equal(packageInputs.release_kind, 'formal');
     assert.equal(packageInputs.source_commit, 'a'.repeat(40));
     assert.equal(packageInputs.companion_commit, 'c'.repeat(40));
+    assert.equal(packageInputs.companion_version, undefined);
     assert.equal(packageInputs.npm_tag, 'latest');
     assert.deepEqual(JSON.parse(packageInputs.platform_runs).map(run => run.runId), [1, 2, 3, 4]);
     assert.equal(joint.document.npmRun.runId, 5);
@@ -194,8 +201,11 @@ esac
     assert.equal(conflict.calls.length, 0);
     const invalidJoint = run(['--workflow', '--platform', 'linux', '--publish-npm'], false);
     assert.equal(invalidJoint.calls.length, 0);
-    const testing = run(['--workflow', '--release-version', '1.7.0-ci1232.20261103120000', '--publish-npm', '--npm-tag', 'ci1232', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private']);
+    const testing = run(['--workflow', '--release-version', '1.7.0-ci1232.20261103120000', '--publish-npm', '--npm-tag', 'ci1232', '--computer-use-commit', 'c'.repeat(40), '--companion-repository', 'example/private', '--companion-version', '0.4.0-ci1232.17']);
     assert.equal(testing.calls.at(-1).inputs.npm_tag, 'ci1232');
+    assert.deepEqual(testing.calls.map(({ inputs }) => inputs.release_version), Array(5).fill('1.7.0-ci1232.20261103120000'));
+    assert.deepEqual(testing.calls.map(({ inputs }) => inputs.companion_version), [undefined, undefined, undefined, '0.4.0-ci1232.17', '0.4.0-ci1232.17']);
+    assert.equal(run(['--workflow', '--companion-version', '0.4.0'], false).calls.length, 0);
     for (const args of [['--workflow', '--platform', 'linux', '--generate'], ['--workflow', '--platform', 'linux', '--delivery-profile', 'customer']]) {
       const skipped = run(args);
       assert.equal(skipped.calls.length, 1);
@@ -212,20 +222,5 @@ esac
     const all = run(['--dispatch', '--platform', 'linux', '--bundle-codex-runtime', '1']);
     assert.equal(all.calls.length, 3);
     assert.ok(all.calls.every(call => call.inputs.bundle_codex_runtime === '1'));
-
-    const workflows = path.join(root, '.github/workflows');
-    fs.mkdirSync(workflows, { recursive: true });
-    fs.writeFileSync(path.join(workflows, 'build-platform-components.yml'), 'jobs:\n  build:\n    environment: office-component-signing\n');
-    const signed = run(['--workflow', '--platform', 'all'], true, {
-      RELEASE_WORKFLOW_COMMIT: 'b'.repeat(40), MOCK_SIGNING_BRANCH: 'develop',
-    });
-    const signingChanges = fs.readFileSync(path.join(root, 'tags.log'), 'utf8');
-    assert.ok(signed.calls.every(call => call.ref === 'build-request-request-1'));
-    assert.match(signingChanges, /deployment-branch-policies -f name=build-request-request-1 -f type=tag/);
-    const unapproved = run(['--workflow', '--platform', 'all'], false, {
-      RELEASE_WORKFLOW_COMMIT: 'b'.repeat(40), MOCK_SIGNING_BRANCH: 'other',
-    });
-    assert.equal(unapproved.calls.length, 0);
-    assert.doesNotMatch(fs.readFileSync(path.join(root, 'tags.log'), 'utf8'), /deployment-branch-policies/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

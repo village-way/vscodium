@@ -52,7 +52,8 @@ VERSION_TIME_PATCH="${VERSION_TIME_PATCH:-${BUILD_PATCH:-}}"
 REQUEST_ID=""
 OUTPUT_FORMAT="text"
 COMPUTER_USE_REF=""
-OFFICE_PLUGIN_VERSION=""
+COMPANION_VERSION=""
+OFFICE_COMPONENT_VERSION=""
 NPM_TAG="latest"
 PRIVATE_SOURCE_REPOSITORY="${PRIVATE_SOURCE_REPOSITORY:-}"
 COMPANION_REPOSITORY="${COMPANION_REPOSITORY:-}"
@@ -111,8 +112,9 @@ VSCodium Stable 版本手动触发脚本
   --no-npm        禁止全部 npm 写入
   --npm-tag       latest 或 ci1232（测试预发布）
   --computer-use-ref 指定私有 companion 源码 Ref
+  --companion-version 指定 companion 制品版本，留空使用 Release 版本
+  --office-component-version 指定 Office 制品的独立 X.Y.Z 版本
   --computer-use-commit 固定 companion 的完整 SHA
-  --office-plugin-version 指定 Office 插件包版号
   --help          显示帮助信息
 
 示例:
@@ -169,11 +171,13 @@ while [[ $# -gt 0 ]]; do
             PUBLISH_NPM=false; shift ;;
         --computer-use-commit)
             COMPUTER_USE_COMMIT="$2"; shift 2 ;;
-        --office-plugin-version)
-            OFFICE_PLUGIN_VERSION="$2"; shift 2 ;;
         # zhanlu_change start - explicit optional companion and joint publication controls
         --publish-npm)
             PUBLISH_NPM=true; shift ;;
+        --companion-version)
+            COMPANION_VERSION="${2:?missing companion version}"; shift 2 ;;
+        --office-component-version)
+            OFFICE_COMPONENT_VERSION="${2:?missing Office component version}"; shift 2 ;;
         --npm-tag)
             NPM_TAG="$2"; shift 2 ;;
         --computer-use-ref)
@@ -527,6 +531,7 @@ ensure_release_target() {
         ZHANLU_DELIVERY_PROFILE="${DELIVERY_PROFILE}" SOURCE_BRANCH="${SOURCE_BRANCH}" \
         ZHANLU_DELIVERY_SOURCE_COMMIT="${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
         ZHANLU_DELIVERY_PROFILE_DIGEST="${ZHANLU_DELIVERY_PROFILE_DIGEST}" \
+        ZL_OFFICE_COMPONENT_VERSION="${OFFICE_COMPONENT_VERSION}" \
         ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" ./create-release.sh
 }
 # zhanlu_change end
@@ -587,6 +592,9 @@ trigger_workflow() {
     wf_fields+=(-f "profile_digest=${ZHANLU_DELIVERY_PROFILE_DIGEST}")
     wf_fields+=(-f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}")
     wf_fields+=(-f "release_version=${RELEASE_VERSION}")
+    if [[ -n "${OFFICE_COMPONENT_VERSION}" ]]; then
+        wf_fields+=(-f "office_component_version=${OFFICE_COMPONENT_VERSION}")
+    fi
     wf_fields+=(-f "bundle_codex_runtime=${ZHANLU_BUNDLE_CODEX_RUNTIME}")
     if [[ -n "${REQUEST_ID}" ]]; then
         wf_fields+=(-f "portal_request_id=${REQUEST_ID}")
@@ -609,8 +617,8 @@ trigger_workflow() {
     local -a failed_workflows=() # zhanlu_change
     for workflow in "${workflows[@]}"; do
         local -a dispatch_fields=("${wf_fields[@]}")
-        if [[ "$workflow" == "stable-linux.yml" && -n "$OFFICE_PLUGIN_VERSION" ]]; then
-            dispatch_fields+=(-f "office_plugin_version=${OFFICE_PLUGIN_VERSION}")
+        if [[ "$workflow" == stable-linux.yml && -n "${OFFICE_COMPONENT_VERSION}" && "$PLATFORM" == all && "$GENERATE_ONLY" == false ]]; then
+            dispatch_fields+=(-f "assemble_office_plugin=true")
         fi
         # zhanlu_change start - companion builds are independent of IDE internals
         if [[ -n "${PRIVATE_SOURCE_REPOSITORY}" ]]; then dispatch_fields+=(-f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}"); fi
@@ -620,6 +628,9 @@ trigger_workflow() {
                 -f "companion_commit=${COMPUTER_USE_COMMIT}" -f "platform=${PLATFORM}"
                 -f "generate_assets=${GENERATE_ONLY}" -f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}"
                 -f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}" -f "companion_repository=${COMPANION_REPOSITORY}")
+            if [[ -n "${COMPANION_VERSION}" ]]; then
+                dispatch_fields+=(-f "companion_version=${COMPANION_VERSION}")
+            fi
         fi
         # zhanlu_change end
         print_info "触发工作流: $workflow"
@@ -636,7 +647,8 @@ for index in range(0, len(args), 2):
     value = args[index + 1]
     if value.startswith("="):
         value = value[1:]
-    inputs[value.split("=", 1)[0] if "=" in value else value] = value.split("=", 1)[1] if "=" in value else ""
+    key, _, argument = value.partition("=")
+    inputs[key] = argument == "true" if key == "assemble_office_plugin" else argument
 print(json.dumps({"ref": sys.argv[1], "inputs": inputs}))
 PY
 )"
@@ -674,8 +686,9 @@ PY
             npm_payload="$(jq -cn --arg ref "${WORKFLOW_REF}" --arg version "${RELEASE_VERSION}" \
                 --arg kind "${RELEASE_KIND}" --arg source "${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
                 --arg request "${REQUEST_ID}" --arg companion "${COMPUTER_USE_COMMIT}" --arg tag "${NPM_TAG}" \
+                --arg companionVersion "${COMPANION_VERSION}" \
                 --arg privateSource "${PRIVATE_SOURCE_REPOSITORY}" --arg companionRepo "${COMPANION_REPOSITORY}" --argjson runs "${runs_json}" \
-                '{ref:$ref,inputs:{publish_npm:true,release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson),companion_commit:$companion,npm_tag:$tag,private_source_repository:$privateSource,companion_repository:$companionRepo}}')"
+                '{ref:$ref,inputs:({publish_npm:true,release_version:$version,release_kind:$kind,source_commit:$source,request_id:$request,platform_runs:($runs|tojson),companion_commit:$companion,npm_tag:$tag,private_source_repository:$privateSource,companion_repository:$companionRepo} + (if $companionVersion == "" then {} else {companion_version:$companionVersion} end))}')"
             npm_run_id="" npm_run_url=""
             if npm_response="$(gh api "repos/${REPO}/actions/workflows/publish-package.yml/dispatches" \
                 --method POST -H "Accept: application/vnd.github+json" \
@@ -718,15 +731,17 @@ main() {
     echo "========================================"
     echo ""
 
-    if [[ -n "$OFFICE_PLUGIN_VERSION" ]]; then
-        if [[ ! "$OFFICE_PLUGIN_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || "${#OFFICE_PLUGIN_VERSION}" -gt 64 ]]; then
-            print_error "Office plugin version must use X.Y.Z"
+    if [[ -n "$OFFICE_COMPONENT_VERSION" ]]; then
+        if [[ ! "$OFFICE_COMPONENT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || "${#OFFICE_COMPONENT_VERSION}" -gt 64 ]]; then
+            print_error "Office component version must use X.Y.Z (at most 64 characters)"
             exit 1
         fi
-        if [[ "$TRIGGER_MODE" != workflow || "$PLATFORM" != all || "$GENERATE_ONLY" == true || "${RELEASE_DRAFT:-true}" != true ]]; then
-            print_error "Office plugin packaging requires all platforms and a draft Release"
-            exit 1
-        fi
+        case "${RELEASE_DRAFT:-true}" in
+            false|FALSE|0|no|NO)
+                print_error "An independent Office version requires a draft Release"
+                exit 1
+                ;;
+        esac
     fi
     check_gh_cli
     get_repo_info
@@ -739,10 +754,23 @@ main() {
         COMPUTER_USE_COMMIT="$(gh api "repos/${COMPANION_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"
     fi
     if [[ -n "${COMPUTER_USE_COMMIT}" && ! "${COMPUTER_USE_COMMIT}" =~ ^[a-f0-9]{40}$ ]]; then print_error "Invalid companion commit"; exit 1; fi
+    if [[ -n "${COMPANION_VERSION}" ]]; then
+        if [[ -z "${COMPUTER_USE_COMMIT}" || "$TRIGGER_MODE" != workflow ||
+            ! "${COMPANION_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-ci1232\.[1-9][0-9]*)?$ ]]; then
+            print_error "Independent companion version requires a pinned companion, --workflow and an exact version"
+            exit 1
+        fi
+        if [[ "${RELEASE_KIND}" == formal && "${COMPANION_VERSION}" == *-* ]]; then
+            print_error "Formal builds require a stable companion version"
+            exit 1
+        fi
+    fi
     if [[ "${PUBLISH_NPM}" == true ]]; then
         [[ -n "${COMPUTER_USE_COMMIT}" && "$PLATFORM" == all && "$GENERATE_ONLY" == false && "$DELIVERY_PROFILE" == default && "$TRIGGER_MODE" == workflow ]] || { print_error "Joint npm requires a pinned companion, all platforms and default Release output"; exit 1; }
         case "${NPM_TAG}:${RELEASE_VERSION}" in
-            ci1232:1.7.0-ci1232.*) ;;
+            ci1232:1.7.0-ci1232.*)
+                [[ "${COMPANION_VERSION:-${RELEASE_VERSION}}" == *-ci1232.* ]] || { print_error "ci1232 requires a companion prerelease version"; exit 1; }
+                ;;
             latest:*) [[ "${RELEASE_KIND}" == formal ]] || { print_error "latest requires a stable formal version"; exit 1; } ;;
             *) print_error "Invalid joint npm tag"; exit 1 ;;
         esac

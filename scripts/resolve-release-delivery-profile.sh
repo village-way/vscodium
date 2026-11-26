@@ -109,7 +109,9 @@ write_release_delivery_metadata() {
         --arg sourceCommit "${ZHANLU_DELIVERY_SOURCE_COMMIT:-}" \
         --arg profileDigest "${ZHANLU_DELIVERY_PROFILE_DIGEST:-}" \
         --arg assetsRepository "${ZHANLU_DELIVERY_ASSETS_REPOSITORY:-${ASSETS_REPOSITORY}}" \
+        --arg officeComponentVersion "${ZL_OFFICE_COMPONENT_VERSION:-}" \
         --argjson expectedAssets "${ZHANLU_DELIVERY_EXPECTED_ASSETS:?missing artifact contract}" \
-        '{schemaVersion:1,releaseVersion:$releaseVersion,deliveryProfile:$profile,sourceRef:$sourceRef,sourceCommit:$sourceCommit,profileDigest:$profileDigest,assetsRepository:$assetsRepository,expectedAssets:($expectedAssets | walk(if type == "string" then gsub("__RELEASE_VERSION__";$releaseVersion) else . end))}' \
+        '{schemaVersion:1,releaseVersion:$releaseVersion,deliveryProfile:$profile,sourceRef:$sourceRef,sourceCommit:$sourceCommit,profileDigest:$profileDigest,assetsRepository:$assetsRepository,expectedAssets:($expectedAssets | walk(if type == "string" then gsub("__RELEASE_VERSION__";$releaseVersion) else . end))}
+         + (if $officeComponentVersion == "" then {} else {officeComponentVersion:$officeComponentVersion} end)' \
         > "${output}"
 }
