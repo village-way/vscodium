@@ -621,6 +621,7 @@ jobs:
 
       - name: Prepare assets
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # zhanlu_change - authenticate public Debian sysroot and Chromium reads
           SHOULD_BUILD_REH: 'no'
           SHOULD_BUILD_REH_WEB: 'no'
         run: ./prepare_assets.sh
