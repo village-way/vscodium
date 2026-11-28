@@ -53,6 +53,7 @@ REQUEST_ID=""
 OUTPUT_FORMAT="text"
 COMPUTER_USE_REF=""
 COMPANION_VERSION=""
+OFFICE_COMPONENT_VERSION=""
 NPM_TAG="latest"
 PRIVATE_SOURCE_REPOSITORY="${PRIVATE_SOURCE_REPOSITORY:-}"
 COMPANION_REPOSITORY="${COMPANION_REPOSITORY:-}"
@@ -112,6 +113,7 @@ VSCodium Stable 版本手动触发脚本
   --npm-tag       latest 或 ci1232（测试预发布）
   --computer-use-ref 指定私有 companion 源码 Ref
   --companion-version 指定 companion 制品版本，留空使用 Release 版本
+  --office-component-version 指定 Office 制品的独立 X.Y.Z 版本
   --computer-use-commit 固定 companion 的完整 SHA
   --help          显示帮助信息
 
@@ -174,6 +176,8 @@ while [[ $# -gt 0 ]]; do
             PUBLISH_NPM=true; shift ;;
         --companion-version)
             COMPANION_VERSION="${2:?missing companion version}"; shift 2 ;;
+        --office-component-version)
+            OFFICE_COMPONENT_VERSION="${2:?missing Office component version}"; shift 2 ;;
         --npm-tag)
             NPM_TAG="$2"; shift 2 ;;
         --computer-use-ref)
@@ -316,6 +320,25 @@ get_repo_info() {
 }
 
 # zhanlu_change start - workflow_dispatch accepts branch/tag refs, so pin a neutral immutable request tag
+authorize_component_signing_tag() {
+    local tag="$1"
+    local recipe=".github/workflows/build-platform-components.yml"
+    if [[ ! -f "$recipe" ]] || ! grep -Eq '^[[:space:]]*environment:[[:space:]]*office-component-signing[[:space:]]*$' "$recipe"; then
+        return 0
+    fi
+    local branch="${WORKFLOW_REF#refs/heads/}" policies
+    local endpoint="repos/${REPO}/environments/office-component-signing/deployment-branch-policies"
+    local settings_token="${GITHUB_GIT_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
+    policies="$(GH_TOKEN="$settings_token" gh api --paginate "${endpoint}?per_page=100")"
+    if ! jq -es --arg branch "$branch" 'any(.[] | .branch_policies[]?; .type == "branch" and .name == $branch)' <<<"$policies" >/dev/null; then
+        print_error "Workflow branch is not approved for Office component signing: $branch"
+        return 1
+    fi
+    if ! jq -es --arg tag "$tag" 'any(.[] | .branch_policies[]?; .type == "tag" and .name == $tag)' <<<"$policies" >/dev/null; then
+        GH_TOKEN="$settings_token" gh api --method POST "$endpoint" -f "name=$tag" -f "type=tag" >/dev/null
+    fi
+}
+
 pin_workflow_ref() {
     local expected="${RELEASE_WORKFLOW_COMMIT:-}"
     [[ -n "$expected" ]] || return 0
@@ -334,6 +357,7 @@ pin_workflow_ref() {
         print_error "Request tag lookup failed; refusing to mutate references"
         return 1
     fi
+    authorize_component_signing_tag "$tag"
     WORKFLOW_REF="$tag"
 }
 # zhanlu_change end
@@ -507,6 +531,7 @@ ensure_release_target() {
         ZHANLU_DELIVERY_PROFILE="${DELIVERY_PROFILE}" SOURCE_BRANCH="${SOURCE_BRANCH}" \
         ZHANLU_DELIVERY_SOURCE_COMMIT="${ZHANLU_DELIVERY_SOURCE_COMMIT}" \
         ZHANLU_DELIVERY_PROFILE_DIGEST="${ZHANLU_DELIVERY_PROFILE_DIGEST}" \
+        ZL_OFFICE_COMPONENT_VERSION="${OFFICE_COMPONENT_VERSION}" \
         ASSETS_REPOSITORY="${ZHANLU_DELIVERY_ASSETS_REPOSITORY}" ./create-release.sh
 }
 # zhanlu_change end
@@ -567,6 +592,9 @@ trigger_workflow() {
     wf_fields+=(-f "profile_digest=${ZHANLU_DELIVERY_PROFILE_DIGEST}")
     wf_fields+=(-f "assets_repository=${ZHANLU_DELIVERY_ASSETS_REPOSITORY}")
     wf_fields+=(-f "release_version=${RELEASE_VERSION}")
+    if [[ -n "${OFFICE_COMPONENT_VERSION}" ]]; then
+        wf_fields+=(-f "office_component_version=${OFFICE_COMPONENT_VERSION}")
+    fi
     wf_fields+=(-f "bundle_codex_runtime=${ZHANLU_BUNDLE_CODEX_RUNTIME}")
     if [[ -n "${REQUEST_ID}" ]]; then
         wf_fields+=(-f "portal_request_id=${REQUEST_ID}")
@@ -589,6 +617,9 @@ trigger_workflow() {
     local -a failed_workflows=() # zhanlu_change
     for workflow in "${workflows[@]}"; do
         local -a dispatch_fields=("${wf_fields[@]}")
+        if [[ "$workflow" == stable-linux.yml && -n "${OFFICE_COMPONENT_VERSION}" && "$PLATFORM" == all && "$GENERATE_ONLY" == false ]]; then
+            dispatch_fields+=(-f "assemble_office_plugin=true")
+        fi
         # zhanlu_change start - companion builds are independent of IDE internals
         if [[ -n "${PRIVATE_SOURCE_REPOSITORY}" ]]; then dispatch_fields+=(-f "private_source_repository=${PRIVATE_SOURCE_REPOSITORY}"); fi
         if [[ "$workflow" == "build-companion.yml" ]]; then
@@ -616,7 +647,8 @@ for index in range(0, len(args), 2):
     value = args[index + 1]
     if value.startswith("="):
         value = value[1:]
-    inputs[value.split("=", 1)[0] if "=" in value else value] = value.split("=", 1)[1] if "=" in value else ""
+    key, _, argument = value.partition("=")
+    inputs[key] = argument == "true" if key == "assemble_office_plugin" else argument
 print(json.dumps({"ref": sys.argv[1], "inputs": inputs}))
 PY
 )"
@@ -699,6 +731,18 @@ main() {
     echo "========================================"
     echo ""
 
+    if [[ -n "$OFFICE_COMPONENT_VERSION" ]]; then
+        if [[ ! "$OFFICE_COMPONENT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || "${#OFFICE_COMPONENT_VERSION}" -gt 64 ]]; then
+            print_error "Office component version must use X.Y.Z (at most 64 characters)"
+            exit 1
+        fi
+        case "${RELEASE_DRAFT:-true}" in
+            false|FALSE|0|no|NO)
+                print_error "An independent Office version requires a draft Release"
+                exit 1
+                ;;
+        esac
+    fi
     check_gh_cli
     get_repo_info
     resolve_release_version

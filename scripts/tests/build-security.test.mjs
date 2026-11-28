@@ -488,6 +488,13 @@ test('stable Linux keeps native Bridge preparation and Bun in the packaging job'
   assert.match(desktop, /uses: oven-sh\/setup-bun@/, 'stable desktop packaging installs Bun');
 });
 
+test('stable platform calls name the protected component signing secret', { skip: !publicEntry }, () => {
+  for (const platform of ['linux', 'macos', 'windows']) {
+    const components = platformWorkflow('stable', platform).split(/^  platform_components:$/m)[1];
+    assert.match(components, /^      PLATFORM_COMPONENT_SIGNING_KEY: \$\{\{ secrets\.PLATFORM_COMPONENT_SIGNING_KEY \}\}$/m, platform);
+  }
+});
+
 test('stable release inputs expose the optional Codex runtime switch', { skip: !publicEntry }, () => {
   for (const platform of ['linux', 'macos', 'windows']) {
     assert.match(platformWorkflow('stable', platform), /bundle_codex_runtime:/, platform);

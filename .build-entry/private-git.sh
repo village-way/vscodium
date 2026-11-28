@@ -18,10 +18,11 @@ fi
 
 # A successful authenticated SSH probe plus an anonymous API 404 proves this
 # repository exists without exposing it publicly. Any ambiguous response fails closed.
-private_status="$(curl --silent --show-error --connect-timeout 15 --max-time 30 --output /dev/null --write-out '%{http_code}' \
+private_status="$(curl --silent --show-error --retry 3 --retry-max-time 90 \
+  --connect-timeout 15 --max-time 30 --output /dev/null --write-out '%{http_code}' \
   "https://api.github.com/repos/${repository}")"
 if [[ "$private_status" != '404' ]]; then
-  echo 'Private storage visibility could not be verified.' >&2
+  printf 'Private storage visibility could not be verified. HTTP %s.\n' "$private_status" >&2
   exit 1
 fi
 
